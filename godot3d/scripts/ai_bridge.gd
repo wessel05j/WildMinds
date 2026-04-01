@@ -2,6 +2,7 @@ extends Node
 class_name AIBridge
 
 signal decision_ready(creature_id: String, decision: Dictionary)
+signal decision_failed(creature_id: String, message: String)
 signal status_ready(payload: Dictionary)
 signal request_failed(message: String)
 
@@ -56,7 +57,7 @@ func _pump_queue() -> void:
 			active_requests = max(active_requests - 1, 0)
 			pending_ids.erase(str(item["id"]))
 			request.queue_free()
-			emit_signal("request_failed", "Could not send a decision request.")
+			emit_signal("decision_failed", str(item["id"]), "Could not send a decision request.")
 
 
 func _on_status_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray, request: HTTPRequest) -> void:
@@ -87,13 +88,13 @@ func _on_decision_completed(
 	request.queue_free()
 
 	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
-		emit_signal("request_failed", "The AI helper service could not return a decision.")
+		emit_signal("decision_failed", creature_id, "The AI helper service could not return a decision.")
 		_pump_queue()
 		return
 
 	var payload: Variant = JSON.parse_string(body.get_string_from_utf8())
 	if typeof(payload) != TYPE_DICTIONARY:
-		emit_signal("request_failed", "The AI helper returned malformed decision data.")
+		emit_signal("decision_failed", creature_id, "The AI helper returned malformed decision data.")
 		_pump_queue()
 		return
 

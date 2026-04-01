@@ -5,6 +5,7 @@ var fuel := 60.0
 var warmth_radius := 5.0
 var fire_root: Node3D
 var glow: OmniLight3D
+var ember_particles: GPUParticles3D
 var material_palette: Dictionary = {}
 
 
@@ -26,6 +27,8 @@ func tick(delta: float, is_night: bool) -> void:
 	if glow:
 		glow.visible = fuel > 0.0
 		glow.light_energy = 1.6 + sin(Time.get_ticks_msec() / 1000.0 * 9.0) * 0.25
+	if ember_particles:
+		ember_particles.emitting = fuel > 0.0
 	if fire_root:
 		fire_root.rotation.y += delta * 0.35
 
@@ -89,3 +92,35 @@ func _rebuild_visual() -> void:
 	glow.omni_range = 11.0
 	glow.shadow_enabled = false
 	add_child(glow)
+
+	ember_particles = GPUParticles3D.new()
+	ember_particles.amount = 18
+	ember_particles.lifetime = 1.4
+	ember_particles.one_shot = false
+	ember_particles.explosiveness = 0.0
+	ember_particles.preprocess = 0.8
+	ember_particles.position = Vector3(0.0, 0.38, 0.0)
+	ember_particles.draw_pass_1 = QuadMesh.new()
+	var particle_mesh: QuadMesh = ember_particles.draw_pass_1
+	particle_mesh.size = Vector2(0.08, 0.08)
+	var particle_material := ParticleProcessMaterial.new()
+	particle_material.direction = Vector3(0.0, 1.0, 0.0)
+	particle_material.spread = 22.0
+	particle_material.gravity = Vector3(0.0, 0.9, 0.0)
+	particle_material.initial_velocity_min = 0.3
+	particle_material.initial_velocity_max = 0.9
+	particle_material.scale_min = 0.4
+	particle_material.scale_max = 1.0
+	particle_material.color = Color(1.0, 0.72, 0.36, 0.72)
+	particle_material.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	particle_material.emission_sphere_radius = 0.12
+	ember_particles.process_material = particle_material
+	var ember_material := StandardMaterial3D.new()
+	ember_material.albedo_color = Color(1.0, 0.72, 0.36, 0.75)
+	ember_material.emission_enabled = true
+	ember_material.emission = Color(0.85, 0.4, 0.14)
+	ember_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	ember_material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	ember_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ember_particles.material_override = ember_material
+	fire_root.add_child(ember_particles)

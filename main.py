@@ -18,7 +18,6 @@ SERVICE_URL = "http://127.0.0.1:8765/health"
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch the WildMinds 3D Godot project")
     parser.add_argument("--headless-smoke", action="store_true", help="Boot the Godot project headlessly and quit")
-    parser.add_argument("--skip-ai-bootstrap", action="store_true", help="Force the AI helper into heuristic mode")
     parser.add_argument("--legacy-2d", action="store_true", help="Run the old PyGame prototype instead")
     return parser.parse_args()
 
@@ -60,15 +59,11 @@ def wait_for_service(timeout: float = 40.0) -> dict[str, object] | None:
     return None
 
 
-def launch_service(force_heuristic: bool) -> subprocess.Popen[bytes]:
-    env = os.environ.copy()
-    if force_heuristic:
-        env["WILDMINDS_FORCE_HEURISTIC"] = "1"
-
+def launch_service() -> subprocess.Popen[bytes]:
     return subprocess.Popen(
         [sys.executable, "-m", "godot_ai_service.server"],
         cwd=str(ROOT),
-        env=env,
+        env=os.environ.copy(),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
@@ -97,11 +92,14 @@ def main() -> None:
     service_process: subprocess.Popen[bytes] | None = None
     service_status = wait_for_service(timeout=2.0)
     if service_status is None:
-        service_process = launch_service(force_heuristic=args.skip_ai_bootstrap)
+        service_process = launch_service()
         service_started = True
         service_status = wait_for_service()
         if service_status is None:
-            raise RuntimeError("WildMinds AI helper could not be started.")
+            raise RuntimeError("WildMinds AI helper could not be started with the required local model.")
+
+    if not bool(service_status.get("using_local_ai", False)):
+        raise RuntimeError(str(service_status.get("details", "WildMinds requires a local Ollama model to launch.")))
 
     print(service_status.get("details", "WildMinds AI helper ready."), flush=True)
     try:

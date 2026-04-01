@@ -18,6 +18,8 @@ const NAME_POOLS := {
 	"wolf": ["Ash", "Fen", "Rook", "Thorn", "Morrow", "Slate"],
 	"boar": ["Brim", "Tusk", "Cinder", "Bramble", "Ridge"],
 	"scavenger": ["Mira", "Vale", "Orin", "Sable", "Kest", "Nera"],
+	"deer": ["Lark", "Briar", "Moss", "Thistle", "Fawn", "Sorrel"],
+	"fox": ["Rune", "Clover", "Ember", "Tawny", "Vesper", "Ashen"],
 }
 
 var terrain_noise := FastNoiseLite.new()
@@ -68,6 +70,15 @@ var sky_material: ProceduralSkyMaterial
 var last_ai_error_message := ""
 var player_dead := false
 var respawn_timer := 0.0
+var last_noise_position := Vector3.ZERO
+var last_noise_age := 999.0
+var last_noise_level := "none"
+var last_noise_strength := 0.0
+var footstep_noise_timer := 0.0
+var damage_overlay: ColorRect
+var damage_flash := 0.0
+var crosshair_flash := 0.0
+var active_effects: Array = []
 
 
 func _ready() -> void:
@@ -84,6 +95,7 @@ func _ready() -> void:
 	add_child(ai_bridge)
 	ai_bridge.status_ready.connect(_on_ai_status_ready)
 	ai_bridge.decision_ready.connect(_on_ai_decision_ready)
+	ai_bridge.decision_failed.connect(_on_ai_decision_failed)
 	ai_bridge.request_failed.connect(_on_ai_request_failed)
 	ai_bridge.request_status()
 
@@ -98,12 +110,20 @@ func _physics_process(delta: float) -> void:
 	craft_cooldown = max(0.0, craft_cooldown - delta)
 	status_timer = max(0.0, status_timer - delta)
 	smoke_elapsed += delta
+	last_noise_age += delta
+	footstep_noise_timer = max(0.0, footstep_noise_timer - delta)
+	damage_flash = max(0.0, damage_flash - delta * 1.65)
+	crosshair_flash = max(0.0, crosshair_flash - delta * 2.8)
 
 	_update_environment_lighting()
 	_constrain_player_to_world()
+	_tick_world_effects(delta)
 	if not player_dead:
 		player.tick_survival(delta, _is_night(), _is_near_campfire(player.global_position))
 		_handle_player_actions()
+		if player.move_direction.length() > 0.12 and footstep_noise_timer <= 0.0:
+			_record_noise(player.global_position, "footsteps", 0.32)
+			footstep_noise_timer = 0.75
 		if player.health <= 0.0:
 			_start_player_death("You died. Respawning soon.")
 	else:
@@ -245,8 +265,18 @@ func _build_material_library() -> void:
 		"boar_snout": _make_material(Color(0.46, 0.34, 0.25), 0.91),
 		"boar_mane": _make_material(Color(0.12, 0.08, 0.07), 0.99),
 		"tusk": _make_material(Color(0.88, 0.84, 0.74), 0.8),
+		"deer_fur": _make_material(Color(0.57, 0.43, 0.27), 0.93, 0.0, Color(0.0, 0.0, 0.0), _make_noise_texture(141, 0.11)),
+		"deer_undercoat": _make_material(Color(0.82, 0.74, 0.61), 0.88),
+		"antler": _make_material(Color(0.68, 0.59, 0.42), 0.95),
+		"fox_fur": _make_material(Color(0.76, 0.42, 0.18), 0.91, 0.0, Color(0.0, 0.0, 0.0), _make_noise_texture(153, 0.14)),
+		"fox_white": _make_material(Color(0.94, 0.91, 0.82), 0.83),
+		"fox_dark": _make_material(Color(0.19, 0.13, 0.12), 0.95),
 		"scavenger_robe": _make_material(Color(0.19, 0.22, 0.2), 0.95, 0.0, Color(0.0, 0.0, 0.0), _make_noise_texture(119, 0.09)),
 		"scavenger_trim": _make_material(Color(0.52, 0.36, 0.22), 0.92),
+		"grass_tuft": _make_material(Color(0.41, 0.57, 0.29), 0.96, 0.0, Color(0.0, 0.0, 0.0), _make_noise_texture(164, 0.09)),
+		"reed": _make_material(Color(0.49, 0.58, 0.34), 0.97),
+		"flower_gold": _make_material(Color(0.9, 0.75, 0.31), 0.72, 0.0, Color(0.12, 0.08, 0.0)),
+		"flower_blue": _make_material(Color(0.39, 0.58, 0.93), 0.7, 0.0, Color(0.04, 0.06, 0.12)),
 		"water": _make_material(Color(0.15, 0.32, 0.37, 0.72), 0.12, 0.02, Color(0.02, 0.05, 0.06), _make_noise_texture(132, 0.04), true),
 	}
 
@@ -460,6 +490,21 @@ func _spawn_landscape_props() -> void:
 	for _index in range(55):
 		_spawn_rock_cluster(random_world_point(-0.45), randf_range(0.8, 1.5))
 
+	for _index in range(120):
+		_spawn_grass_patch(random_world_point(-0.2), randf_range(0.75, 1.35))
+
+	for _index in range(44):
+		var wetland_point := _random_point_in_biomes(["wetland"], -0.7)
+		_spawn_reed_clump(wetland_point, randf_range(0.85, 1.3))
+
+	for _index in range(38):
+		var flower_point := _random_point_in_biomes(["meadow", "forest"], -0.2)
+		_spawn_flower_patch(flower_point, randf_range(0.78, 1.1))
+
+	for _index in range(16):
+		var log_point := _random_point_in_biomes(["forest", "meadow"], -0.15)
+		_spawn_fallen_log(log_point, randf_range(0.8, 1.35))
+
 
 func _spawn_tree(position_value: Vector3, scale_factor: float, biome_name: String = "forest") -> void:
 	var tree := Node3D.new()
@@ -522,6 +567,89 @@ func _spawn_rock_cluster(position_value: Vector3, scale_factor: float) -> void:
 	world_root.add_child(cluster)
 
 
+func _spawn_grass_patch(position_value: Vector3, scale_factor: float) -> void:
+	var biome_name := biome_at(position_value)
+	if biome_name == "highland":
+		return
+	var patch := Node3D.new()
+	patch.position = position_value
+	patch.rotation_degrees.y = randf_range(0.0, 360.0)
+	var blade_material: Material = material_palette.get("grass_tuft", material_palette.get("foliage"))
+	if biome_name == "wetland":
+		blade_material = material_palette.get("reed", blade_material)
+
+	for index in range(5):
+		var blade := MeshInstance3D.new()
+		var mesh := PlaneMesh.new()
+		mesh.size = Vector2(0.18 * scale_factor, (0.65 + randf() * 0.35) * scale_factor)
+		blade.mesh = mesh
+		blade.position = Vector3(randf_range(-0.26, 0.26), 0.22 * scale_factor, randf_range(-0.22, 0.22))
+		blade.rotation_degrees = Vector3(randf_range(-8.0, 8.0), index * 36.0 + randf_range(-12.0, 12.0), randf_range(-6.0, 6.0))
+		blade.material_override = blade_material
+		patch.add_child(blade)
+
+	world_root.add_child(patch)
+
+
+func _spawn_reed_clump(position_value: Vector3, scale_factor: float) -> void:
+	var clump := Node3D.new()
+	clump.position = position_value
+	clump.rotation_degrees.y = randf_range(0.0, 360.0)
+	for _index in range(7):
+		var stem := MeshInstance3D.new()
+		var mesh := CylinderMesh.new()
+		mesh.top_radius = 0.03 * scale_factor
+		mesh.bottom_radius = 0.045 * scale_factor
+		mesh.height = randf_range(1.1, 1.9) * scale_factor
+		stem.mesh = mesh
+		stem.position = Vector3(randf_range(-0.28, 0.28), mesh.height * 0.5, randf_range(-0.24, 0.24))
+		stem.rotation_degrees.z = randf_range(-6.0, 7.0)
+		stem.material_override = material_palette.get("reed", material_palette.get("grass_tuft"))
+		clump.add_child(stem)
+	world_root.add_child(clump)
+
+
+func _spawn_flower_patch(position_value: Vector3, scale_factor: float) -> void:
+	var patch := Node3D.new()
+	patch.position = position_value
+	var bloom_material: Material = material_palette.get("flower_gold")
+	if randf() < 0.45:
+		bloom_material = material_palette.get("flower_blue", bloom_material)
+	for _index in range(4):
+		var stem := MeshInstance3D.new()
+		var stem_mesh := CylinderMesh.new()
+		stem_mesh.top_radius = 0.016
+		stem_mesh.bottom_radius = 0.025
+		stem_mesh.height = 0.42 * scale_factor
+		stem.mesh = stem_mesh
+		stem.position = Vector3(randf_range(-0.16, 0.16), 0.21 * scale_factor, randf_range(-0.16, 0.16))
+		stem.material_override = material_palette.get("reed", material_palette.get("grass_tuft"))
+		patch.add_child(stem)
+
+		var bloom := MeshInstance3D.new()
+		var bloom_mesh := SphereMesh.new()
+		bloom_mesh.radius = 0.08 * scale_factor
+		bloom_mesh.height = 0.16 * scale_factor
+		bloom.mesh = bloom_mesh
+		bloom.position = stem.position + Vector3(0.0, 0.24 * scale_factor, 0.0)
+		bloom.material_override = bloom_material
+		patch.add_child(bloom)
+	world_root.add_child(patch)
+
+
+func _spawn_fallen_log(position_value: Vector3, scale_factor: float) -> void:
+	var fallen_log := MeshInstance3D.new()
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = 0.16 * scale_factor
+	mesh.bottom_radius = 0.22 * scale_factor
+	mesh.height = 1.9 * scale_factor
+	fallen_log.mesh = mesh
+	fallen_log.position = position_value + Vector3(0.0, 0.22 * scale_factor, 0.0)
+	fallen_log.rotation = Vector3(deg_to_rad(90.0), randf_range(0.0, TAU), randf_range(-0.14, 0.14))
+	fallen_log.material_override = material_palette.get("bark")
+	world_root.add_child(fallen_log)
+
+
 func _spawn_player() -> void:
 	player = PlayerController.new()
 	player.position = Vector3(0.0, _terrain_height(0.0, 0.0) + 0.2, 0.0)
@@ -547,28 +675,38 @@ func _spawn_creatures() -> void:
 	var spawn_table := [
 		{"species": "wolf", "count": 4},
 		{"species": "boar", "count": 3},
+		{"species": "deer", "count": 5},
+		{"species": "fox", "count": 3},
 		{"species": "scavenger", "count": 4},
 	]
 	var creature_counter := 0
 	for row in spawn_table:
 		for _index in range(int(row["count"])):
 			var creature := CreatureActor.new()
-			var spawn_position := random_world_point(0.0)
+			var spawn_position := _creature_spawn_point(str(row["species"]))
 			while spawn_position.distance_to(player.global_position) < 14.0:
-				spawn_position = random_world_point(0.0)
+				spawn_position = _creature_spawn_point(str(row["species"]))
 			creature.position = spawn_position
+			var profile := _species_spawn_profile(str(row["species"]))
 			creature.configure(
 				{
 					"id": "creature_%d" % creature_counter,
 					"name": _take_name(str(row["species"])),
 					"species": str(row["species"]),
 					"personality": _random_personality(str(row["species"])),
-					"max_health": 90.0 if row["species"] == "wolf" else (120.0 if row["species"] == "boar" else 82.0),
-					"health": 90.0 if row["species"] == "wolf" else (120.0 if row["species"] == "boar" else 82.0),
-					"aggression": 72.0 if row["species"] == "wolf" else (68.0 if row["species"] == "boar" else 44.0),
-					"fear": 22.0 if row["species"] == "wolf" else (34.0 if row["species"] == "boar" else 18.0),
+					"max_health": profile["max_health"],
+					"health": profile["max_health"],
+					"aggression": profile["aggression"],
+					"fear": profile["fear"],
 					"hunger": randf_range(18.0, 56.0),
+					"thirst": randf_range(14.0, 48.0),
 					"energy": randf_range(58.0, 92.0),
+					"comfort": randf_range(42.0, 72.0),
+					"curiosity": profile["curiosity"],
+					"social_drive": profile["social_drive"],
+					"sickness": randf_range(0.0, 8.0) if row["species"] == "scavenger" else randf_range(0.0, 4.0),
+					"alertness": randf_range(52.0, 78.0),
+					"warmth": randf_range(42.0, 66.0),
 				}
 			)
 			world_root.add_child(creature)
@@ -593,8 +731,48 @@ func _random_personality(species_name: String) -> String:
 			return ["patient hunter", "territorial", "coldly aggressive", "pack-minded"][randi() % 4]
 		"boar":
 			return ["defensive bruiser", "food obsessed", "stubborn", "dangerously reactive"][randi() % 4]
+		"deer":
+			return ["nervous grazer", "herd-minded drifter", "alert runner", "shy water seeker"][randi() % 4]
+		"fox":
+			return ["cunning prowler", "opportunistic scavenger", "skittish trickster", "silent hunter"][randi() % 4]
 		_:
 			return ["opportunistic scavenger", "nervy looter", "cautious rival", "greedy survivor"][randi() % 4]
+
+
+func _species_spawn_profile(species_name: String) -> Dictionary:
+	match species_name:
+		"wolf":
+			return {"max_health": 90.0, "aggression": 72.0, "fear": 22.0, "curiosity": 44.0, "social_drive": 72.0}
+		"boar":
+			return {"max_health": 120.0, "aggression": 68.0, "fear": 34.0, "curiosity": 38.0, "social_drive": 26.0}
+		"deer":
+			return {"max_health": 76.0, "aggression": 18.0, "fear": 58.0, "curiosity": 34.0, "social_drive": 64.0}
+		"fox":
+			return {"max_health": 62.0, "aggression": 36.0, "fear": 28.0, "curiosity": 66.0, "social_drive": 28.0}
+		_:
+			return {"max_health": 82.0, "aggression": 44.0, "fear": 18.0, "curiosity": 56.0, "social_drive": 48.0}
+
+
+func _random_point_in_biomes(allowed_biomes: Array, min_height: float = -0.35) -> Vector3:
+	for _attempt in range(80):
+		var point := random_world_point(min_height)
+		if allowed_biomes.has(biome_at(point)):
+			return point
+	return random_world_point(min_height)
+
+
+func _creature_spawn_point(species_name: String) -> Vector3:
+	match species_name:
+		"wolf":
+			return _random_point_in_biomes(["forest", "highland", "meadow"], -0.1)
+		"boar":
+			return _random_point_in_biomes(["forest", "meadow", "wetland"], -0.35)
+		"deer":
+			return _random_point_in_biomes(["meadow", "forest", "wetland"], -0.3)
+		"fox":
+			return _random_point_in_biomes(["forest", "meadow"], -0.1)
+		_:
+			return _random_point_in_biomes(["forest", "meadow", "highland"], -0.1)
 
 
 func random_world_point(min_height: float = -0.35) -> Vector3:
@@ -620,18 +798,74 @@ func _random_resource_point(kind: String) -> Vector3:
 	return random_world_point(-0.5)
 
 
+func biome_at(point: Vector3) -> String:
+	return _biome_name(point.x, point.z, point.y)
+
+
+func find_water_point(origin: Vector3) -> Vector3:
+	var best_point := origin
+	var best_height := INF
+	for radius in [8.0, 16.0, 26.0]:
+		for index in range(12):
+			var angle := TAU * float(index) / 12.0
+			var sample_x: float = origin.x + cos(angle) * radius
+			var sample_z: float = origin.z + sin(angle) * radius
+			var sample_height := _terrain_height(sample_x, sample_z)
+			if sample_height < best_height:
+				best_height = sample_height
+				best_point = Vector3(sample_x, sample_height + 0.05, sample_z)
+	return best_point
+
+
+func _water_distance_for(origin: Vector3) -> float:
+	return origin.distance_to(find_water_point(origin))
+
+
+func _noise_payload_for(origin: Vector3) -> Dictionary:
+	if last_noise_age > 12.0 or last_noise_level == "none":
+		return {
+			"kind": "none",
+			"distance": 999.0,
+			"age": 999.0,
+			"strength": 0.0,
+		}
+	return {
+		"kind": last_noise_level,
+		"distance": snapped(origin.distance_to(last_noise_position), 0.1),
+		"age": snapped(last_noise_age, 0.1),
+		"strength": last_noise_strength,
+	}
+
+
+func noise_target_for(origin: Vector3):
+	if last_noise_age > 9.0 or last_noise_level == "none":
+		return null
+	if origin.distance_to(last_noise_position) > 38.0:
+		return null
+	return last_noise_position
+
+
 func _build_snapshot_for(creature: CreatureActor) -> Dictionary:
 	var nearby_creatures: Array = []
+	var allies_nearby := 0
+	var rivals_nearby := 0
 	for other in creatures:
 		if other == creature or other.health <= 0.0:
 			continue
 		var distance := creature.global_position.distance_to(other.global_position)
 		if distance <= 24.0:
+			var is_ally: bool = other.species == creature.species
+			if is_ally:
+				allies_nearby += 1
+			else:
+				rivals_nearby += 1
 			nearby_creatures.append(
 				{
 					"name": other.display_name,
 					"species": other.species,
 					"distance": snapped(distance, 0.1),
+					"ally": is_ally,
+					"action": str(other.decision.get("action", "idle_watch")),
 				}
 			)
 			if nearby_creatures.size() >= 4:
@@ -647,6 +881,7 @@ func _build_snapshot_for(creature: CreatureActor) -> Dictionary:
 				{
 					"kind": resource.resource_type,
 					"distance": snapped(resource_distance, 0.1),
+					"biome": biome_at(resource.global_position),
 				}
 			)
 			if nearby_resources.size() >= 4:
@@ -654,11 +889,20 @@ func _build_snapshot_for(creature: CreatureActor) -> Dictionary:
 
 	return {
 		"time_label": _time_label(),
+		"biome": biome_at(creature.global_position),
+		"elevation": snapped(creature.global_position.y, 0.1),
+		"near_water": _water_distance_for(creature.global_position) < 10.0,
+		"near_campfire": _is_near_campfire(creature.global_position),
+		"allies_nearby": allies_nearby,
+		"rivals_nearby": rivals_nearby,
 		"player": {
 			"distance": snapped(creature.global_position.distance_to(player.global_position), 0.1),
 			"health": player.health,
 			"near_campfire": _is_near_campfire(player.global_position),
+			"making_noise": last_noise_age < 1.5,
+			"noise_level": last_noise_level,
 		},
+		"last_noise": _noise_payload_for(creature.global_position),
 		"nearby_creatures": nearby_creatures,
 		"nearby_resources": nearby_resources,
 	}
@@ -703,6 +947,8 @@ func damage_player(source_name: String, amount: float) -> void:
 	if player_dead:
 		return
 	player.receive_damage(amount)
+	damage_flash = 1.0
+	_spawn_effect_pulse(player.global_position + Vector3(0.0, 1.1, 0.0), Color(0.94, 0.24, 0.18, 0.9), 0.34, 0.38, 1.0)
 	_show_message("%s hit you for %d." % [source_name, int(round(amount))])
 	if player.health <= 0.0:
 		_start_player_death("You were taken down by %s." % source_name)
@@ -717,6 +963,8 @@ func _handle_player_actions() -> void:
 		if resource != null and player.global_position.distance_to(resource.global_position) <= resource.gather_radius + 1.15:
 			if resource.harvest(1):
 				player.add_resource(resource.resource_type, 1)
+				_record_noise(player.global_position, "gather", 0.42)
+				_spawn_effect_pulse(resource.global_position + Vector3(0.0, 0.55, 0.0), Color(0.54, 0.82, 0.41, 0.88), 0.22, 0.44, 0.65)
 				_show_message("Gathered 1 %s." % _resource_name(resource.resource_type))
 		else:
 			_show_message("Nothing close enough to gather.")
@@ -730,10 +978,12 @@ func _handle_player_actions() -> void:
 
 	if Input.is_action_just_pressed("attack") and attack_cooldown <= 0.0:
 		attack_cooldown = 0.55
+		_record_noise(player.global_position, "attack", 0.95)
 		_player_attack()
 
 	if Input.is_action_just_pressed("craft_fire") and craft_cooldown <= 0.0:
 		craft_cooldown = 0.55
+		_record_noise(player.global_position, "craft", 0.62)
 		_craft_campfire()
 
 
@@ -746,6 +996,8 @@ func _player_attack() -> void:
 		return
 
 	target.receive_damage(26.0, "the player")
+	_spawn_effect_pulse(target.global_position + Vector3(0.0, 0.9, 0.0), Color(1.0, 0.78, 0.34, 0.95), 0.28, 0.35, 0.9)
+	crosshair_flash = 1.0
 	_show_message("You struck %s the %s." % [target.display_name, target.species])
 	if target.health <= 0.0:
 		_remove_creature(target)
@@ -769,6 +1021,7 @@ func _craft_campfire() -> void:
 	world_root.add_child(fire)
 	fire.apply_material_palette(material_palette)
 	campfires.append(fire)
+	_spawn_effect_pulse(fire_position + Vector3(0.0, 0.5, 0.0), Color(1.0, 0.62, 0.24, 0.95), 0.3, 0.55, 0.8)
 	_show_message("Campfire placed.")
 
 
@@ -824,6 +1077,39 @@ func _focus_creature():
 			best_score = score
 			best = creature
 	return best
+
+
+func _record_noise(position_value: Vector3, level: String, strength: float) -> void:
+	last_noise_position = position_value
+	last_noise_age = 0.0
+	last_noise_level = level
+	last_noise_strength = strength
+
+
+func broadcast_creature_sound(creature: CreatureActor, sound_name: String) -> void:
+	if sound_name == "" or sound_name == "none":
+		return
+
+	var noise_strength := 0.36
+	if sound_name in ["howl", "bark", "squeal"]:
+		noise_strength = 0.78
+	elif sound_name in ["growl", "grunt", "snort"]:
+		noise_strength = 0.58
+	_record_noise(creature.global_position, sound_name, noise_strength)
+
+	for other in creatures:
+		if other == creature or other.health <= 0.0:
+			continue
+		if other.global_position.distance_to(creature.global_position) > 18.0:
+			continue
+		if other.species == creature.species:
+			other.alertness = min(100.0, other.alertness + 8.0)
+			other.fear = max(0.0, other.fear - 4.0)
+			other.remember("%s made a %s." % [creature.display_name, sound_name])
+
+	if player.global_position.distance_to(creature.global_position) < 16.0:
+		_spawn_effect_pulse(creature.global_position + Vector3(0.0, 1.0, 0.0), Color(0.95, 0.83, 0.4, 0.72), 0.18, 0.32, 0.5)
+		_show_message("%s the %s made a %s." % [creature.display_name, creature.species, sound_name])
 
 
 func _constrain_player_to_world() -> void:
@@ -896,14 +1182,27 @@ func _on_ai_status_ready(payload: Dictionary) -> void:
 	if bool(payload.get("using_local_ai", false)):
 		ai_status_text = "AI: local %s" % str(payload.get("model_name", "model"))
 	else:
-		ai_status_text = "AI: heuristic brain"
+		ai_status_text = "AI: unavailable"
 
 
 func _on_ai_decision_ready(creature_id: String, decision_data: Dictionary) -> void:
 	var creature = creature_lookup.get(creature_id)
 	if creature == null:
 		return
+	last_ai_error_message = ""
+	ai_status_text = "AI: local %s" % str(ai_bridge.latest_status.get("model_name", "model"))
 	creature.apply_decision(decision_data)
+
+
+func _on_ai_decision_failed(creature_id: String, message: String) -> void:
+	var creature = creature_lookup.get(creature_id)
+	if creature != null:
+		creature.cancel_pending_decision(1.0, "AI call failed")
+	if last_ai_error_message == message:
+		return
+	last_ai_error_message = message
+	ai_status_text = "AI: retrying model"
+	_show_message(message)
 
 
 func _on_ai_request_failed(message: String) -> void:
@@ -922,6 +1221,7 @@ func _show_message(text: String) -> void:
 func _remove_creature(creature: CreatureActor) -> void:
 	if not creatures.has(creature):
 		return
+	_spawn_effect_pulse(creature.global_position + Vector3(0.0, 0.95, 0.0), Color(0.92, 0.41, 0.25, 0.95), 0.42, 0.55, 1.4)
 	_show_message("%s the %s is down." % [creature.display_name, creature.species])
 	creatures.erase(creature)
 	creature_lookup.erase(creature.creature_id)
@@ -950,6 +1250,13 @@ func _build_ui() -> void:
 	crosshair_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	crosshair_label.add_theme_font_size_override("font_size", 28)
 	ui_root.add_child(crosshair_label)
+
+	damage_overlay = ColorRect.new()
+	damage_overlay.position = Vector2.ZERO
+	damage_overlay.size = Vector2(1600, 900)
+	damage_overlay.color = Color(0.72, 0.06, 0.04, 0.0)
+	ui_root.add_child(damage_overlay)
+	damage_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 	var message_panel := _make_panel(Vector2(18, 18), Vector2(560, 54))
 	ui_root.add_child(message_panel)
@@ -1083,6 +1390,10 @@ func _update_ui() -> void:
 	stone_label.text = "Stone x%d" % int(player.inventory.get("stone", 0))
 
 	ai_status_label.text = ai_status_text
+	var low_health := clampf((38.0 - player.health) / 38.0, 0.0, 1.0)
+	var pulse := 0.18 + 0.12 * sin(Time.get_ticks_msec() / 1000.0 * 5.0)
+	damage_overlay.color.a = clampf(damage_flash * 0.4 + low_health * pulse, 0.0, 0.52)
+	crosshair_label.modulate = Color(1.0, 0.86, 0.52).lerp(Color(1.0, 1.0, 1.0), 1.0 - crosshair_flash)
 	var lines: Array = []
 	for creature in _visible_creatures():
 		var action := "thinking..." if creature.decision_pending else str(creature.decision.get("action", "wander"))
@@ -1103,3 +1414,63 @@ func _visible_creatures() -> Array:
 			if visible_list.size() >= 6:
 				break
 	return visible_list
+
+
+func _spawn_effect_pulse(position_value: Vector3, color: Color, scale_factor: float = 0.28, duration: float = 0.45, rise_speed: float = 0.9) -> void:
+	if world_root == null:
+		return
+	var effect_root := Node3D.new()
+	effect_root.position = position_value
+	world_root.add_child(effect_root)
+
+	var material := StandardMaterial3D.new()
+	material.albedo_color = color
+	material.emission_enabled = true
+	material.emission = color
+	material.roughness = 0.28
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+
+	for offset in [Vector3.ZERO, Vector3(0.12, 0.08, 0.0), Vector3(-0.1, 0.03, 0.08)]:
+		var shard := MeshInstance3D.new()
+		var mesh := SphereMesh.new()
+		mesh.radius = 0.12
+		mesh.height = 0.24
+		shard.mesh = mesh
+		shard.position = offset
+		shard.scale = Vector3.ONE * scale_factor
+		shard.material_override = material
+		effect_root.add_child(shard)
+
+	active_effects.append(
+		{
+			"node": effect_root,
+			"material": material,
+			"age": 0.0,
+			"duration": duration,
+			"rise_speed": rise_speed,
+			"base_scale": scale_factor,
+			"color": color,
+		}
+	)
+
+
+func _tick_world_effects(delta: float) -> void:
+	for index in range(active_effects.size() - 1, -1, -1):
+		var effect: Dictionary = active_effects[index]
+		var node: Node3D = effect["node"]
+		var material: StandardMaterial3D = effect["material"]
+		var color: Color = effect["color"]
+		var age: float = float(effect["age"]) + delta
+		var duration: float = float(effect["duration"])
+		var progress := clampf(age / max(duration, 0.01), 0.0, 1.0)
+		effect["age"] = age
+		node.position.y += float(effect["rise_speed"]) * delta
+		node.scale = Vector3.ONE * lerpf(1.0, 1.95, progress)
+		material.albedo_color = Color(color.r, color.g, color.b, 1.0 - progress)
+		material.emission = color * (1.0 - progress * 0.4)
+		active_effects[index] = effect
+		if age >= duration:
+			node.queue_free()
+			active_effects.remove_at(index)

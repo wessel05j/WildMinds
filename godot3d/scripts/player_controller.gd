@@ -24,12 +24,18 @@ var scarf_mesh: MeshInstance3D
 var camera_pivot: Node3D
 var camera: Camera3D
 var material_palette: Dictionary = {}
+var camera_base_position := Vector3.ZERO
+var headbob_time := 0.0
+var landing_bounce := 0.0
+var last_floor_state := false
 
 
 func _ready() -> void:
 	floor_snap_length = 0.45
 	_build_visuals()
 	_build_camera()
+	camera_base_position = camera_pivot.position
+	last_floor_state = true
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
 
@@ -48,6 +54,7 @@ func apply_material_palette(palette: Dictionary) -> void:
 func _physics_process(delta: float) -> void:
 	_capture_input()
 	_move_character(delta)
+	_update_camera_motion(delta)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -76,6 +83,8 @@ func _capture_input() -> void:
 
 
 func _move_character(delta: float) -> void:
+	var was_grounded := is_on_floor()
+	var fall_speed := velocity.y
 	var acceleration := 22.0 if input_direction.length() > 0.01 else 14.0
 	var target_velocity := input_direction * move_speed
 	velocity.x = move_toward(velocity.x, target_velocity.x, acceleration * delta)
@@ -89,6 +98,9 @@ func _move_character(delta: float) -> void:
 			velocity.y = jump_velocity
 
 	move_and_slide()
+	if not was_grounded and is_on_floor() and fall_speed < -3.0:
+		landing_bounce = min(0.18, abs(fall_speed) * 0.015)
+	last_floor_state = is_on_floor()
 
 	var horizontal_velocity := Vector3(velocity.x, 0.0, velocity.z)
 	move_direction = horizontal_velocity.normalized() if horizontal_velocity.length() > 0.1 else Vector3.ZERO
@@ -158,6 +170,7 @@ func eat_berry() -> bool:
 
 func receive_damage(amount: float) -> void:
 	health = max(0.0, health - amount)
+	landing_bounce = min(0.2, landing_bounce + amount * 0.0026)
 
 
 func set_controls_enabled(enabled: bool) -> void:
@@ -178,7 +191,11 @@ func reset_state(spawn_position: Vector3) -> void:
 	hunger = 22.0
 	energy = 74.0
 	look_pitch = 0.0
+	headbob_time = 0.0
+	landing_bounce = 0.0
 	camera_pivot.rotation.x = 0.0
+	camera_pivot.position = camera_base_position
+	camera.rotation.z = 0.0
 
 
 func view_forward() -> Vector3:
@@ -205,6 +222,28 @@ func _build_camera() -> void:
 	camera.fov = 78.0
 	camera.near = 0.05
 	camera_pivot.add_child(camera)
+
+
+func _update_camera_motion(delta: float) -> void:
+	if camera_pivot == null or camera == null:
+		return
+
+	landing_bounce = move_toward(landing_bounce, 0.0, delta * 2.6)
+	var speed_factor := clampf(Vector2(velocity.x, velocity.z).length() / max(move_speed, 0.1), 0.0, 1.0)
+	if is_on_floor() and speed_factor > 0.05:
+		headbob_time += delta * lerpf(6.0, 9.4, speed_factor)
+	else:
+		headbob_time = lerpf(headbob_time, 0.0, delta * 1.3)
+
+	var sway_x: float = sin(headbob_time) * 0.03 * speed_factor
+	var sway_y: float = abs(cos(headbob_time * 2.0)) * 0.04 * speed_factor
+	var target_position := camera_base_position + Vector3(sway_x, sway_y - landing_bounce, 0.0)
+	if not is_on_floor():
+		target_position.y -= 0.02
+	camera_pivot.position = camera_pivot.position.lerp(target_position, delta * 8.0)
+
+	var target_roll: float = -input_direction.x * 0.045 + sin(headbob_time) * 0.01 * speed_factor
+	camera.rotation.z = lerpf(camera.rotation.z, target_roll, delta * 9.0)
 
 
 func _build_visuals() -> void:
