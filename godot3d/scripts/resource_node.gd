@@ -7,7 +7,7 @@ var amount := 4
 var respawn_amount := 4
 var respawn_delay := 18.0
 var respawn_timer := 0.0
-var gather_radius := 2.0
+var gather_radius := 2.8
 var shell: Node3D
 var bob_offset := 0.0
 var material_palette: Dictionary = {}

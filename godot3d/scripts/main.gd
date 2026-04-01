@@ -6,12 +6,13 @@ const ResourceNode3D = preload("res://scripts/resource_node.gd")
 const CampfireNode = preload("res://scripts/campfire.gd")
 const AIBridge = preload("res://scripts/ai_bridge.gd")
 
-const WORLD_RADIUS := 54.0
-const TERRAIN_RESOLUTION := 88
+const WORLD_RADIUS := 170.0
+const CONTENT_RADIUS := 128.0
+const TERRAIN_RESOLUTION := 136
 const RESOURCE_CONFIG := [
-	{"kind": "berries", "count": 18, "amount": 4},
-	{"kind": "wood", "count": 12, "amount": 3},
-	{"kind": "stone", "count": 10, "amount": 4},
+	{"kind": "berries", "count": 28, "amount": 4},
+	{"kind": "wood", "count": 22, "amount": 3},
+	{"kind": "stone", "count": 18, "amount": 4},
 ]
 const NAME_POOLS := {
 	"wolf": ["Ash", "Fen", "Rook", "Thorn", "Morrow", "Slate"],
@@ -21,6 +22,7 @@ const NAME_POOLS := {
 
 var terrain_noise := FastNoiseLite.new()
 var detail_noise := FastNoiseLite.new()
+var biome_noise := FastNoiseLite.new()
 var world_root: Node3D
 var terrain_mesh_instance: MeshInstance3D
 var terrain_body: StaticBody3D
@@ -36,6 +38,7 @@ var used_names := {}
 var material_palette := {}
 
 var ui_root: CanvasLayer
+var crosshair_label: Label
 var message_label: Label
 var ai_status_label: Label
 var creature_log_label: Label
@@ -63,6 +66,8 @@ var sun_light: DirectionalLight3D
 var moon_light: DirectionalLight3D
 var sky_material: ProceduralSkyMaterial
 var last_ai_error_message := ""
+var player_dead := false
+var respawn_timer := 0.0
 
 
 func _ready() -> void:
@@ -82,7 +87,7 @@ func _ready() -> void:
 	ai_bridge.request_failed.connect(_on_ai_request_failed)
 	ai_bridge.request_status()
 
-	_show_message("WASD move | E gather | Q eat berry | Space attack | F campfire")
+	_show_message("WASD move | Mouse look | Space jump | Left click attack | E gather | Q eat berry | F campfire | Esc release mouse")
 
 
 func _physics_process(delta: float) -> void:
@@ -95,8 +100,16 @@ func _physics_process(delta: float) -> void:
 	smoke_elapsed += delta
 
 	_update_environment_lighting()
-	player.tick_survival(delta, _is_night(), _is_near_campfire(player.global_position))
-	_handle_player_actions()
+	_constrain_player_to_world()
+	if not player_dead:
+		player.tick_survival(delta, _is_night(), _is_near_campfire(player.global_position))
+		_handle_player_actions()
+		if player.health <= 0.0:
+			_start_player_death("You died. Respawning soon.")
+	else:
+		respawn_timer = max(0.0, respawn_timer - delta)
+		if respawn_timer <= 0.0:
+			_respawn_player()
 
 	for resource in resources:
 		resource.tick(delta)
@@ -136,6 +149,8 @@ func _physics_process(delta: float) -> void:
 
 
 func _configure_input_map() -> void:
+	_reset_action_bindings("attack")
+	_reset_action_bindings("jump")
 	_bind_key("move_left", KEY_A)
 	_bind_key("move_left", KEY_LEFT)
 	_bind_key("move_right", KEY_D)
@@ -145,11 +160,20 @@ func _configure_input_map() -> void:
 	_bind_key("move_back", KEY_S)
 	_bind_key("move_back", KEY_DOWN)
 	_bind_key("interact", KEY_E)
-	_bind_key("attack", KEY_SPACE)
+	_bind_mouse("attack", MOUSE_BUTTON_LEFT)
+	_bind_key("jump", KEY_SPACE)
 	_bind_key("eat_berry", KEY_Q)
 	_bind_key("eat_berry", KEY_1)
 	_bind_key("eat_berry", KEY_ENTER)
 	_bind_key("craft_fire", KEY_F)
+
+
+func _reset_action_bindings(action: String) -> void:
+	if not InputMap.has_action(action):
+		InputMap.add_action(action)
+		return
+	for existing in InputMap.action_get_events(action):
+		InputMap.action_erase_event(action, existing)
 
 
 func _bind_key(action: String, keycode: Key) -> void:
@@ -160,6 +184,17 @@ func _bind_key(action: String, keycode: Key) -> void:
 			return
 	var event := InputEventKey.new()
 	event.physical_keycode = keycode
+	InputMap.action_add_event(action, event)
+
+
+func _bind_mouse(action: String, button_index: MouseButton) -> void:
+	if not InputMap.has_action(action):
+		InputMap.add_action(action)
+	for existing in InputMap.action_get_events(action):
+		if existing is InputEventMouseButton and existing.button_index == button_index:
+			return
+	var event := InputEventMouseButton.new()
+	event.button_index = button_index
 	InputMap.action_add_event(action, event)
 
 
@@ -176,12 +211,23 @@ func _prepare_noises() -> void:
 	detail_noise.frequency = 0.12
 	detail_noise.fractal_octaves = 3
 
+	biome_noise.seed = randi()
+	biome_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	biome_noise.frequency = 0.011
+	biome_noise.fractal_octaves = 2
+
 
 func _build_material_library() -> void:
+	var terrain_material := _make_material(Color(0.38, 0.47, 0.31), 0.98, 0.0, Color(0.0, 0.0, 0.0), _make_noise_texture(14, 0.03))
+	terrain_material.vertex_color_use_as_albedo = true
 	material_palette = {
+		"terrain": terrain_material,
 		"ground_grass": _make_material(Color(0.28, 0.44, 0.25), 0.98, 0.0, Color(0.0, 0.0, 0.0), _make_noise_texture(14, 0.035)),
 		"ground_soil": _make_material(Color(0.39, 0.31, 0.22), 1.0, 0.0, Color(0.0, 0.0, 0.0), _make_noise_texture(42, 0.06)),
 		"foliage": _make_material(Color(0.39, 0.55, 0.31), 0.94, 0.0, Color(0.0, 0.0, 0.0), _make_noise_texture(61, 0.085)),
+		"foliage_forest": _make_material(Color(0.22, 0.39, 0.21), 0.96, 0.0, Color(0.0, 0.0, 0.0), _make_noise_texture(62, 0.082)),
+		"foliage_meadow": _make_material(Color(0.48, 0.62, 0.33), 0.94, 0.0, Color(0.0, 0.0, 0.0), _make_noise_texture(63, 0.082)),
+		"foliage_wetland": _make_material(Color(0.36, 0.48, 0.25), 0.96, 0.0, Color(0.0, 0.0, 0.0), _make_noise_texture(64, 0.082)),
 		"bark": _make_material(Color(0.43, 0.31, 0.2), 0.97, 0.0, Color(0.0, 0.0, 0.0), _make_noise_texture(75, 0.14)),
 		"stone": _make_material(Color(0.47, 0.49, 0.48), 0.93, 0.0, Color(0.0, 0.0, 0.0), _make_noise_texture(88, 0.12)),
 		"stone_highlight": _make_material(Color(0.63, 0.62, 0.58), 0.9),
@@ -247,7 +293,7 @@ func _build_environment() -> void:
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	environment.ambient_light_energy = 1.15
 	environment.fog_enabled = true
-	environment.fog_density = 0.009
+	environment.fog_density = 0.0035
 	environment.fog_light_color = Color(0.47, 0.58, 0.52)
 
 	sky_material = ProceduralSkyMaterial.new()
@@ -293,7 +339,7 @@ func _build_terrain() -> void:
 	var terrain_mesh := _generate_terrain_mesh()
 	terrain_mesh_instance = MeshInstance3D.new()
 	terrain_mesh_instance.mesh = terrain_mesh
-	terrain_mesh_instance.material_override = material_palette["ground_grass"]
+	terrain_mesh_instance.material_override = material_palette["terrain"]
 	world_root.add_child(terrain_mesh_instance)
 
 	terrain_body = StaticBody3D.new()
@@ -340,6 +386,7 @@ func _generate_terrain_mesh() -> ArrayMesh:
 
 
 func _add_terrain_vertex(surface_tool: SurfaceTool, vertex: Vector3) -> void:
+	surface_tool.set_color(_terrain_vertex_color(vertex))
 	surface_tool.set_uv(Vector2(vertex.x * 0.12, vertex.z * 0.12))
 	surface_tool.add_vertex(vertex)
 
@@ -348,21 +395,81 @@ func _terrain_height(x_value: float, z_value: float) -> float:
 	var large_shape := terrain_noise.get_noise_2d(x_value, z_value) * 4.3
 	var detail_shape := detail_noise.get_noise_2d(x_value * 1.6, z_value * 1.6) * 0.9
 	var edge_ratio: float = clampf(Vector2(x_value, z_value).length() / WORLD_RADIUS, 0.0, 1.0)
-	var shoreline_sink := smoothstep(0.78, 1.0, edge_ratio) * 3.6
-	return large_shape + detail_shape - shoreline_sink
+	var outer_ridge := smoothstep(0.68, 0.86, edge_ratio) * 1.2
+	var shoreline_sink := smoothstep(0.92, 1.0, edge_ratio) * 1.9
+	return large_shape + detail_shape + outer_ridge - shoreline_sink
+
+
+func _terrain_vertex_color(vertex: Vector3) -> Color:
+	var biome_name := _biome_name(vertex.x, vertex.z, vertex.y)
+	var shore_blend := smoothstep(-1.0, 0.25, vertex.y)
+	var highland_blend := smoothstep(2.1, 4.8, vertex.y)
+	var base_color := Color(0.4, 0.45, 0.3)
+
+	match biome_name:
+		"forest":
+			base_color = Color(0.22, 0.36, 0.2)
+		"meadow":
+			base_color = Color(0.44, 0.56, 0.28)
+		"wetland":
+			base_color = Color(0.33, 0.42, 0.26)
+		_:
+			base_color = Color(0.43, 0.37, 0.28)
+
+	base_color = base_color.lerp(Color(0.67, 0.61, 0.43), 1.0 - shore_blend)
+	base_color = base_color.lerp(Color(0.48, 0.49, 0.47), highland_blend)
+	return base_color
+
+
+func _biome_name(x_value: float, z_value: float, height_value: float = INF) -> String:
+	var height := height_value if height_value != INF else _terrain_height(x_value, z_value)
+	if height < -0.7:
+		return "wetland"
+	var biome_sample := biome_noise.get_noise_2d(x_value, z_value)
+	if height > 2.4 or biome_sample > 0.34:
+		return "highland"
+	if biome_sample < -0.2:
+		return "forest"
+	return "meadow"
 
 
 func _spawn_landscape_props() -> void:
-	for _index in range(34):
-		_spawn_tree(random_world_point(-0.15), randf_range(0.85, 1.35))
-	for _index in range(14):
-		_spawn_rock_cluster(random_world_point(-0.4), randf_range(0.8, 1.45))
+	for _index in range(110):
+		var point := random_world_point(-0.2)
+		var biome_name := _biome_name(point.x, point.z, point.y)
+		if biome_name == "highland":
+			if randf() < 0.78:
+				_spawn_rock_cluster(point, randf_range(0.9, 1.6))
+			else:
+				_spawn_tree(point, randf_range(0.8, 1.05), biome_name)
+		elif biome_name == "forest":
+			_spawn_tree(point, randf_range(0.95, 1.45), biome_name)
+			if randf() < 0.22:
+				_spawn_tree(point + Vector3(randf_range(-2.8, 2.8), 0.0, randf_range(-2.8, 2.8)), randf_range(0.72, 1.0), biome_name)
+		elif biome_name == "wetland":
+			if randf() < 0.6:
+				_spawn_tree(point, randf_range(0.82, 1.1), biome_name)
+			else:
+				_spawn_rock_cluster(point, randf_range(0.65, 1.0))
+		else:
+			if randf() < 0.65:
+				_spawn_tree(point, randf_range(0.78, 1.12), biome_name)
+			else:
+				_spawn_rock_cluster(point, randf_range(0.75, 1.2))
+
+	for _index in range(55):
+		_spawn_rock_cluster(random_world_point(-0.45), randf_range(0.8, 1.5))
 
 
-func _spawn_tree(position_value: Vector3, scale_factor: float) -> void:
+func _spawn_tree(position_value: Vector3, scale_factor: float, biome_name: String = "forest") -> void:
 	var tree := Node3D.new()
 	tree.position = position_value
 	tree.rotation_degrees.y = randf_range(0.0, 360.0)
+	var canopy_material: Material = material_palette["foliage_forest"]
+	if biome_name == "meadow":
+		canopy_material = material_palette["foliage_meadow"]
+	elif biome_name == "wetland":
+		canopy_material = material_palette["foliage_wetland"]
 
 	var trunk := MeshInstance3D.new()
 	var trunk_mesh := CylinderMesh.new()
@@ -386,7 +493,7 @@ func _spawn_tree(position_value: Vector3, scale_factor: float) -> void:
 		canopy.mesh = canopy_mesh
 		canopy.position = canopy_data["position"] * scale_factor
 		canopy.scale = canopy_data["scale"]
-		canopy.material_override = material_palette["foliage"]
+		canopy.material_override = canopy_material
 		tree.add_child(canopy)
 
 	world_root.add_child(tree)
@@ -428,7 +535,7 @@ func _spawn_resources() -> void:
 		for _index in range(int(config["count"])):
 			var node := ResourceNode3D.new()
 			node.configure("resource_%d" % resource_counter, str(config["kind"]), int(config["amount"]))
-			node.position = random_world_point(-0.5)
+			node.position = _random_resource_point(str(config["kind"]))
 			node.position.y += 0.02
 			world_root.add_child(node)
 			node.apply_material_palette(material_palette)
@@ -438,9 +545,9 @@ func _spawn_resources() -> void:
 
 func _spawn_creatures() -> void:
 	var spawn_table := [
-		{"species": "wolf", "count": 3},
-		{"species": "boar", "count": 2},
-		{"species": "scavenger", "count": 3},
+		{"species": "wolf", "count": 4},
+		{"species": "boar", "count": 3},
+		{"species": "scavenger", "count": 4},
 	]
 	var creature_counter := 0
 	for row in spawn_table:
@@ -492,12 +599,25 @@ func _random_personality(species_name: String) -> String:
 
 func random_world_point(min_height: float = -0.35) -> Vector3:
 	for _attempt in range(48):
-		var x_value := randf_range(-WORLD_RADIUS * 0.88, WORLD_RADIUS * 0.88)
-		var z_value := randf_range(-WORLD_RADIUS * 0.88, WORLD_RADIUS * 0.88)
+		var x_value := randf_range(-CONTENT_RADIUS, CONTENT_RADIUS)
+		var z_value := randf_range(-CONTENT_RADIUS, CONTENT_RADIUS)
 		var y_value := _terrain_height(x_value, z_value)
 		if y_value >= min_height:
 			return Vector3(x_value, y_value + 0.05, z_value)
 	return Vector3(0.0, _terrain_height(0.0, 0.0) + 0.05, 0.0)
+
+
+func _random_resource_point(kind: String) -> Vector3:
+	for _attempt in range(80):
+		var point := random_world_point(-0.5)
+		var biome_name := _biome_name(point.x, point.z, point.y)
+		if kind == "berries" and biome_name in ["forest", "meadow", "wetland"]:
+			return point
+		if kind == "wood" and biome_name in ["forest", "meadow"]:
+			return point
+		if kind == "stone" and biome_name in ["highland", "meadow"]:
+			return point
+	return random_world_point(-0.5)
 
 
 func _build_snapshot_for(creature: CreatureActor) -> Dictionary:
@@ -580,17 +700,21 @@ func find_nearest_campfire(origin: Vector3):
 
 
 func damage_player(source_name: String, amount: float) -> void:
+	if player_dead:
+		return
 	player.receive_damage(amount)
 	_show_message("%s hit you for %d." % [source_name, int(round(amount))])
 	if player.health <= 0.0:
-		_show_message("You were taken down by %s." % source_name)
+		_start_player_death("You were taken down by %s." % source_name)
 
 
 func _handle_player_actions() -> void:
+	if player_dead:
+		return
 	if Input.is_action_just_pressed("interact") and gather_cooldown <= 0.0:
 		gather_cooldown = 0.28
-		var resource = find_nearest_resource("", player.global_position)
-		if resource != null and player.global_position.distance_to(resource.global_position) <= resource.gather_radius + 1.0:
+		var resource = _focus_resource()
+		if resource != null and player.global_position.distance_to(resource.global_position) <= resource.gather_radius + 1.15:
 			if resource.harvest(1):
 				player.add_resource(resource.resource_type, 1)
 				_show_message("Gathered 1 %s." % _resource_name(resource.resource_type))
@@ -614,15 +738,9 @@ func _handle_player_actions() -> void:
 
 
 func _player_attack() -> void:
-	var target = null
-	var best_distance := INF
-	for creature in creatures:
-		if creature.health <= 0.0:
-			continue
-		var distance := player.global_position.distance_to(creature.global_position)
-		if distance < best_distance and distance <= 3.1:
-			best_distance = distance
-			target = creature
+	var target = _focus_creature()
+	if target != null and player.global_position.distance_to(target.global_position) > 3.4:
+		target = null
 	if target == null:
 		_show_message("Your attack hit nothing.")
 		return
@@ -642,9 +760,7 @@ func _craft_campfire() -> void:
 	player.consume_resource("stone", 1)
 
 	var fire := CampfireNode.new()
-	var forward := -player.global_transform.basis.z
-	forward.y = 0.0
-	forward = forward.normalized()
+	var forward := player.view_forward_flat()
 	if forward == Vector3.ZERO:
 		forward = Vector3(0.0, 0.0, 1.0)
 	var fire_position := player.global_position + forward * 1.8
@@ -661,6 +777,91 @@ func _is_near_campfire(point: Vector3) -> bool:
 		if campfire.fuel > 0.0 and point.distance_to(campfire.global_position) <= campfire.warmth_radius:
 			return true
 	return false
+
+
+func _focus_resource():
+	var origin := player.eye_position()
+	var forward := player.view_forward()
+	var best = null
+	var best_score := -INF
+	for resource in resources:
+		if not resource.is_available():
+			continue
+		var target_point: Vector3 = resource.global_position + Vector3(0.0, 0.45, 0.0)
+		var to_resource: Vector3 = target_point - origin
+		var distance := to_resource.length()
+		if distance > resource.gather_radius + 3.0 or distance <= 0.05:
+			continue
+		var direction := to_resource / distance
+		var alignment := direction.dot(forward)
+		if alignment < 0.2:
+			continue
+		var score := alignment * 5.0 - distance * 0.7
+		if score > best_score:
+			best_score = score
+			best = resource
+	return best
+
+
+func _focus_creature():
+	var origin := player.eye_position()
+	var forward := player.view_forward()
+	var best = null
+	var best_score := -INF
+	for creature in creatures:
+		if creature.health <= 0.0:
+			continue
+		var to_creature: Vector3 = (creature.global_position + Vector3(0.0, 0.8, 0.0)) - origin
+		var distance := to_creature.length()
+		if distance > 3.8 or distance <= 0.05:
+			continue
+		var direction := to_creature / distance
+		var alignment := direction.dot(forward)
+		if alignment < 0.08:
+			continue
+		var score := alignment * 5.0 - distance
+		if score > best_score:
+			best_score = score
+			best = creature
+	return best
+
+
+func _constrain_player_to_world() -> void:
+	var planar := Vector2(player.global_position.x, player.global_position.z)
+	if planar.length() <= WORLD_RADIUS * 0.87:
+		return
+	var clamped := planar.normalized() * WORLD_RADIUS * 0.87
+	player.global_position = Vector3(
+		clamped.x,
+		_terrain_height(clamped.x, clamped.y) + 0.25,
+		clamped.y
+	)
+
+
+func _start_player_death(message: String) -> void:
+	if player_dead:
+		return
+	player_dead = true
+	respawn_timer = 2.8
+	player.set_controls_enabled(false)
+	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+	_show_message(message)
+
+
+func _respawn_player() -> void:
+	var spawn_point := _respawn_point()
+	player.reset_state(spawn_point)
+	player_dead = false
+	player.set_controls_enabled(true)
+	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	_show_message("You recovered and returned to the wilds.")
+
+
+func _respawn_point() -> Vector3:
+	var campfire = find_nearest_campfire(player.global_position)
+	if campfire != null:
+		return campfire.global_position + Vector3(0.0, 0.2, 1.8)
+	return Vector3(0.0, _terrain_height(0.0, 0.0) + 0.2, 0.0)
 
 
 func _time_label() -> String:
@@ -740,6 +941,15 @@ func _resource_name(kind: String) -> String:
 func _build_ui() -> void:
 	ui_root = CanvasLayer.new()
 	add_child(ui_root)
+
+	crosshair_label = Label.new()
+	crosshair_label.text = "+"
+	crosshair_label.position = Vector2(796, 430)
+	crosshair_label.size = Vector2(20, 20)
+	crosshair_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	crosshair_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	crosshair_label.add_theme_font_size_override("font_size", 28)
+	ui_root.add_child(crosshair_label)
 
 	var message_panel := _make_panel(Vector2(18, 18), Vector2(560, 54))
 	ui_root.add_child(message_panel)

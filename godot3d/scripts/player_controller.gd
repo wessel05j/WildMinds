@@ -12,6 +12,9 @@ var inventory := {
 
 var move_speed := 8.2
 var gravity_strength := 28.0
+var jump_velocity := 8.6
+var mouse_sensitivity := 0.0024
+var look_pitch := 0.0
 var input_direction := Vector3.ZERO
 var move_direction := Vector3.ZERO
 var body_mesh: MeshInstance3D
@@ -19,7 +22,6 @@ var head_mesh: MeshInstance3D
 var backpack_mesh: MeshInstance3D
 var scarf_mesh: MeshInstance3D
 var camera_pivot: Node3D
-var camera_arm: SpringArm3D
 var camera: Camera3D
 var material_palette: Dictionary = {}
 
@@ -28,6 +30,7 @@ func _ready() -> void:
 	floor_snap_length = 0.45
 	_build_visuals()
 	_build_camera()
+	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
 
 func apply_material_palette(palette: Dictionary) -> void:
@@ -47,15 +50,27 @@ func _physics_process(delta: float) -> void:
 	_move_character(delta)
 
 
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
+		rotation.y -= event.relative.x * mouse_sensitivity
+		look_pitch = clampf(look_pitch - event.relative.y * mouse_sensitivity, deg_to_rad(-82.0), deg_to_rad(82.0))
+		camera_pivot.rotation.x = look_pitch
+
+	if event.is_action_pressed("ui_cancel"):
+		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+	elif event is InputEventMouseButton and event.pressed and Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
+		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+
+
 func _capture_input() -> void:
 	var input_vector := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
-	var forward := -camera.global_transform.basis.z
+	var forward := -global_transform.basis.z
 	forward.y = 0.0
 	forward = forward.normalized()
-	var right := camera.global_transform.basis.x
+	var right := global_transform.basis.x
 	right.y = 0.0
 	right = right.normalized()
-	input_direction = right * input_vector.x + forward * input_vector.y
+	input_direction = right * input_vector.x - forward * input_vector.y
 	if input_direction.length() > 1.0:
 		input_direction = input_direction.normalized()
 
@@ -70,34 +85,52 @@ func _move_character(delta: float) -> void:
 		velocity.y -= gravity_strength * delta
 	else:
 		velocity.y = min(velocity.y, 0.0)
+		if Input.is_action_just_pressed("jump"):
+			velocity.y = jump_velocity
 
 	move_and_slide()
 
 	var horizontal_velocity := Vector3(velocity.x, 0.0, velocity.z)
 	move_direction = horizontal_velocity.normalized() if horizontal_velocity.length() > 0.1 else Vector3.ZERO
-	if move_direction.length() > 0.1:
-		var target_yaw := atan2(move_direction.x, move_direction.z)
-		rotation.y = lerp_angle(rotation.y, target_yaw, delta * 10.0)
 
 
 func tick_survival(delta: float, is_night: bool, near_fire: bool) -> void:
-	hunger = min(100.0, hunger + delta * 1.35)
+	if health <= 0.0:
+		return
+
+	var food_drain := delta * 0.15
+	var energy_regen := 0.0
+
 	if move_direction.length() > 0.05:
-		energy = max(0.0, energy - delta * 3.8)
+		energy = max(0.0, energy - delta * 2.25)
+		food_drain += delta * 0.08
 	else:
-		energy = min(100.0, energy + delta * 2.6)
+		energy_regen += delta * 0.9
 
 	if is_night:
-		energy = max(0.0, energy - delta * 0.9)
+		energy = max(0.0, energy - delta * 0.28)
+		food_drain += delta * 0.02
 
 	if near_fire:
-		energy = min(100.0, energy + delta * 6.0)
-		health = min(100.0, health + delta * 1.1)
+		energy_regen += delta * 1.8
 
-	if hunger > 84.0:
-		health = max(0.0, health - delta * 3.0)
+	if energy_regen > 0.0:
+		var energy_before := energy
+		energy = min(100.0, energy + energy_regen)
+		food_drain += (energy - energy_before) * 0.18
+
+	if hunger < 36.0 and energy > 20.0 and health < 100.0:
+		var heal_rate := 0.28 + (0.22 if near_fire else 0.0)
+		var health_before := health
+		health = min(100.0, health + delta * heal_rate)
+		food_drain += (health - health_before) * 0.45
+
+	hunger = min(100.0, hunger + food_drain)
+
+	if hunger > 92.0:
+		health = max(0.0, health - delta * 1.6)
 	if energy <= 0.0:
-		health = max(0.0, health - delta * 1.8)
+		health = max(0.0, health - delta * 0.8)
 
 
 func add_resource(kind: String, amount: int = 1) -> void:
@@ -127,20 +160,51 @@ func receive_damage(amount: float) -> void:
 	health = max(0.0, health - amount)
 
 
+func set_controls_enabled(enabled: bool) -> void:
+	set_physics_process(enabled)
+	set_process_unhandled_input(enabled)
+	if not enabled:
+		input_direction = Vector3.ZERO
+		move_direction = Vector3.ZERO
+		velocity = Vector3.ZERO
+
+
+func reset_state(spawn_position: Vector3) -> void:
+	global_position = spawn_position
+	velocity = Vector3.ZERO
+	input_direction = Vector3.ZERO
+	move_direction = Vector3.ZERO
+	health = 100.0
+	hunger = 22.0
+	energy = 74.0
+	look_pitch = 0.0
+	camera_pivot.rotation.x = 0.0
+
+
+func view_forward() -> Vector3:
+	return -camera.global_transform.basis.z.normalized()
+
+
+func view_forward_flat() -> Vector3:
+	var forward := view_forward()
+	forward.y = 0.0
+	return forward.normalized()
+
+
+func eye_position() -> Vector3:
+	return camera.global_position
+
+
 func _build_camera() -> void:
 	camera_pivot = Node3D.new()
-	camera_pivot.position = Vector3(0.0, 1.9, 0.0)
+	camera_pivot.position = Vector3(0.0, 1.58, 0.0)
 	add_child(camera_pivot)
-
-	camera_arm = SpringArm3D.new()
-	camera_arm.spring_length = 8.5
-	camera_arm.rotation_degrees = Vector3(-34.0, 0.0, 0.0)
-	camera_pivot.add_child(camera_arm)
 
 	camera = Camera3D.new()
 	camera.current = true
-	camera.fov = 68.0
-	camera_arm.add_child(camera)
+	camera.fov = 78.0
+	camera.near = 0.05
+	camera_pivot.add_child(camera)
 
 
 func _build_visuals() -> void:
@@ -156,7 +220,7 @@ func _build_visuals() -> void:
 	body.radius = 0.46
 	body.height = 0.92
 	body_mesh.mesh = body
-	body_mesh.position = Vector3(0.0, 0.95, 0.0)
+	body_mesh.position = Vector3(0.0, -20.0, 0.0)
 	add_child(body_mesh)
 
 	head_mesh = MeshInstance3D.new()
@@ -164,19 +228,19 @@ func _build_visuals() -> void:
 	head.radius = 0.28
 	head.height = 0.56
 	head_mesh.mesh = head
-	head_mesh.position = Vector3(0.0, 1.72, 0.08)
+	head_mesh.position = Vector3(0.0, -20.0, 0.08)
 	add_child(head_mesh)
 
 	backpack_mesh = MeshInstance3D.new()
 	var pack := BoxMesh.new()
 	pack.size = Vector3(0.36, 0.42, 0.18)
 	backpack_mesh.mesh = pack
-	backpack_mesh.position = Vector3(0.0, 1.05, -0.34)
+	backpack_mesh.position = Vector3(0.0, -20.0, -0.34)
 	add_child(backpack_mesh)
 
 	scarf_mesh = MeshInstance3D.new()
 	var scarf := BoxMesh.new()
 	scarf.size = Vector3(0.48, 0.08, 0.16)
 	scarf_mesh.mesh = scarf
-	scarf_mesh.position = Vector3(0.0, 1.48, 0.12)
+	scarf_mesh.position = Vector3(0.0, -20.0, 0.12)
 	add_child(scarf_mesh)
