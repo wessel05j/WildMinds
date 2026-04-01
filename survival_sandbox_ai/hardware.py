@@ -107,21 +107,21 @@ def choose_ollama_model(profile: HardwareProfile) -> ModelChoice:
     vram = best_gpu.vram_gb if best_gpu else 0.0
     ram = profile.ram_gb
 
-    if vram >= 10 and ram >= 24:
+    if vram >= 12 and ram >= 28:
         return ModelChoice(
             model_name="llama3.1:8b",
-            reasoning="Enough VRAM and system memory for an 8B local model.",
+            reasoning="High-end hardware can afford the larger 8B model without hurting frame pacing.",
         )
 
-    if vram >= 4 or ram >= 12:
+    if vram >= 6 and ram >= 18:
         return ModelChoice(
             model_name="llama3.2:3b",
-            reasoning="Mid-range laptop hardware is a good fit for a faster 3B model.",
+            reasoning="This hardware can handle the 3B model while still keeping creature decisions reasonably quick.",
         )
 
     return ModelChoice(
         model_name="llama3.2:1b",
-        reasoning="Lower-memory hardware is safer with a 1B model to keep the game responsive.",
+        reasoning="For real-time creature AI, the lighter 1B model keeps reactions fast on mid-range or lower-memory hardware.",
     )
 
 

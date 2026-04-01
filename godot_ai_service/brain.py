@@ -217,8 +217,8 @@ class OllamaRuntime:
                     {"role": "user", "content": user_prompt},
                 ],
                 "options": {
-                    "temperature": 0.45,
-                    "num_predict": 180,
+                    "temperature": 0.35,
+                    "num_predict": 96,
                 },
             },
             timeout=self.timeout,
@@ -353,7 +353,7 @@ class LocalCreatureMind:
         )
 
     def _build_user_prompt(self, creature: CreatureState, snapshot: dict[str, Any]) -> str:
-        memory = "; ".join(creature.memory) or "none"
+        memory = "; ".join(creature.memory[-4:]) or "none"
         nearby_creatures = ", ".join(
             f"{item['name']} the {item['species']} at {item['distance']:.1f}m ally={item.get('ally', False)} action={item.get('action', 'unknown')}"
             for item in snapshot.get("nearby_creatures", [])

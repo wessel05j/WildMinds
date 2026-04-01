@@ -23,6 +23,16 @@ func configure(id: String, kind: String, initial_amount: int) -> void:
 	resource_type = kind
 	amount = initial_amount
 	respawn_amount = initial_amount
+	match resource_type:
+		"ore":
+			respawn_delay = 26.0
+			gather_radius = 3.0
+		"fiber", "herb":
+			respawn_delay = 16.0
+			gather_radius = 2.9
+		_:
+			respawn_delay = 18.0
+			gather_radius = 2.8
 
 
 func apply_material_palette(palette: Dictionary) -> void:
@@ -86,6 +96,12 @@ func _rebuild_visual() -> void:
 			_build_berry_bush()
 		"wood":
 			_build_log_pile()
+		"fiber":
+			_build_fiber_bundle()
+		"herb":
+			_build_herb_patch()
+		"ore":
+			_build_ore_vein()
 		_:
 			_build_stone_stack()
 
@@ -157,3 +173,64 @@ func _build_stone_stack() -> void:
 		rock.scale = Vector3(1.0 + randf() * 0.35, 0.75 + randf() * 0.25, 0.9 + randf() * 0.4)
 		rock.material_override = stone_material
 		shell.add_child(rock)
+
+
+func _build_fiber_bundle() -> void:
+	var reed_material = material_palette.get("reed", material_palette.get("grass_tuft"))
+	for index in range(6):
+		var blade := MeshInstance3D.new()
+		var mesh := PlaneMesh.new()
+		mesh.size = Vector2(0.16, 0.72 + randf() * 0.18)
+		blade.mesh = mesh
+		blade.position = Vector3(randf_range(-0.22, 0.22), 0.34, randf_range(-0.18, 0.18))
+		blade.rotation_degrees = Vector3(randf_range(-7.0, 9.0), index * 28.0 + randf_range(-10.0, 10.0), randf_range(-6.0, 6.0))
+		blade.material_override = reed_material
+		shell.add_child(blade)
+
+
+func _build_herb_patch() -> void:
+	var leaf_material = material_palette.get("foliage_meadow", material_palette.get("foliage"))
+	var bloom_material = material_palette.get("flower_blue", material_palette.get("flower_gold"))
+	for offset in [Vector3(-0.18, 0.14, -0.1), Vector3(0.0, 0.18, 0.0), Vector3(0.2, 0.16, 0.08)]:
+		var leaf := MeshInstance3D.new()
+		var mesh := SphereMesh.new()
+		mesh.radius = 0.2
+		mesh.height = 0.26
+		leaf.mesh = mesh
+		leaf.position = offset
+		leaf.scale = Vector3(1.2, 0.65, 1.15)
+		leaf.material_override = leaf_material
+		shell.add_child(leaf)
+
+		var bloom := MeshInstance3D.new()
+		var bloom_mesh := SphereMesh.new()
+		bloom_mesh.radius = 0.06
+		bloom_mesh.height = 0.12
+		bloom.mesh = bloom_mesh
+		bloom.position = offset + Vector3(0.0, 0.16, 0.0)
+		bloom.material_override = bloom_material
+		shell.add_child(bloom)
+
+
+func _build_ore_vein() -> void:
+	var stone_material = material_palette.get("stone")
+	var highlight_material = material_palette.get("stone_highlight", stone_material)
+	for offset in [Vector3(-0.22, 0.2, -0.06), Vector3(0.12, 0.3, 0.08), Vector3(0.24, 0.18, -0.14)]:
+		var rock := MeshInstance3D.new()
+		var mesh := SphereMesh.new()
+		mesh.radius = 0.26
+		mesh.height = 0.44
+		rock.mesh = mesh
+		rock.position = offset
+		rock.scale = Vector3(1.15, 0.82, 1.0 + randf() * 0.2)
+		rock.material_override = stone_material
+		shell.add_child(rock)
+
+		var shard := MeshInstance3D.new()
+		var shard_mesh := BoxMesh.new()
+		shard_mesh.size = Vector3(0.08, 0.2, 0.08)
+		shard.mesh = shard_mesh
+		shard.position = offset + Vector3(0.02, 0.12, -0.01)
+		shard.rotation_degrees = Vector3(randf_range(-18.0, 18.0), randf_range(0.0, 180.0), randf_range(-14.0, 14.0))
+		shard.material_override = highlight_material
+		shell.add_child(shard)

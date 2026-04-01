@@ -8,6 +8,21 @@ var inventory := {
 	"berries": 0,
 	"wood": 0,
 	"stone": 0,
+	"fiber": 0,
+	"herb": 0,
+	"ore": 0,
+	"hide": 0,
+	"bandage": 0,
+	"trail_ration": 0,
+	"spear": 0,
+	"tower_braces": 0,
+	"signal_core": 0,
+	"beacon_lens": 0,
+}
+var skill_xp := {
+	"foraging": 0,
+	"crafting": 0,
+	"combat": 0,
 }
 
 var move_speed := 8.2
@@ -149,15 +164,38 @@ func add_resource(kind: String, amount: int = 1) -> void:
 	inventory[kind] = int(inventory.get(kind, 0)) + amount
 
 
+func get_count(kind: String) -> int:
+	return int(inventory.get(kind, 0))
+
+
 func has_resource(kind: String, amount: int = 1) -> bool:
-	return int(inventory.get(kind, 0)) >= amount
+	return get_count(kind) >= amount
 
 
 func consume_resource(kind: String, amount: int = 1) -> bool:
 	if not has_resource(kind, amount):
 		return false
-	inventory[kind] = int(inventory.get(kind, 0)) - amount
+	inventory[kind] = get_count(kind) - amount
 	return true
+
+
+func gain_skill(skill_name: String, amount: int = 1) -> void:
+	skill_xp[skill_name] = int(skill_xp.get(skill_name, 0)) + amount
+
+
+func skill_level(skill_name: String) -> int:
+	return 1 + int(int(skill_xp.get(skill_name, 0)) / 4)
+
+
+func attack_damage() -> float:
+	var damage := 26.0 + float(skill_level("combat") - 1) * 2.5
+	if has_resource("spear", 1):
+		damage += 8.0
+	return damage
+
+
+func attack_cooldown_scale() -> float:
+	return max(0.62, 1.0 - float(skill_level("combat") - 1) * 0.06)
 
 
 func eat_berry() -> bool:
@@ -165,6 +203,23 @@ func eat_berry() -> bool:
 		return false
 	hunger = max(0.0, hunger - 34.0)
 	energy = min(100.0, energy + 7.0)
+	gain_skill("foraging", 1)
+	return true
+
+
+func use_bandage() -> bool:
+	if not consume_resource("bandage", 1):
+		return false
+	health = min(100.0, health + 24.0)
+	energy = max(0.0, energy - 3.0)
+	return true
+
+
+func use_trail_ration() -> bool:
+	if not consume_resource("trail_ration", 1):
+		return false
+	hunger = max(0.0, hunger - 42.0)
+	energy = min(100.0, energy + 12.0)
 	return true
 
 
@@ -221,6 +276,7 @@ func _build_camera() -> void:
 	camera.current = true
 	camera.fov = 78.0
 	camera.near = 0.05
+	camera.far = 2200.0
 	camera_pivot.add_child(camera)
 
 

@@ -82,5 +82,5 @@ def test_bootstrap_local_model_uses_ready_runtime(monkeypatch) -> None:
     runtime = ReadyRuntime()
     result = bootstrap_local_model(runtime=runtime)
     assert result.ready is True
-    assert result.model_choice.model_name == "llama3.2:3b"
+    assert result.model_choice.model_name == "llama3.2:1b"
     assert runtime.ensured is True

@@ -19,8 +19,8 @@ def test_choose_mid_model_for_laptop_gpu() -> None:
         platform_name="Windows",
         cpu_name="Ryzen",
         logical_cores=12,
-        ram_gb=16.0,
-        gpus=[GPUInfo(name="RTX 3050", vram_gb=4.0)],
+        ram_gb=24.0,
+        gpus=[GPUInfo(name="RTX 3060", vram_gb=8.0)],
     )
     assert choose_ollama_model(profile).model_name == "llama3.2:3b"
 

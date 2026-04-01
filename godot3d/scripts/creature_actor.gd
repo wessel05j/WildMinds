@@ -154,6 +154,10 @@ func cancel_pending_decision(retry_delay: float = 1.0, note: String = "") -> voi
 		remember(note)
 
 
+func defer_next_think(delay: float) -> void:
+	think_cooldown = max(think_cooldown, delay)
+
+
 func receive_damage(amount: float, attacker_label: String = "") -> void:
 	health = max(0.0, health - amount)
 	fear = min(100.0, fear + amount * 0.9)
@@ -502,6 +506,10 @@ func _animate_visuals(horizontal: Vector3, delta: float, action: String) -> void
 			head_pitch = deg_to_rad(-10.0) + sin(gait_time * 0.9) * 0.05
 		elif action == "sniff":
 			head_pitch = deg_to_rad(12.0) + sin(gait_time * 2.8) * 0.12
+		elif action == "eat":
+			head_pitch = deg_to_rad(18.0)
+		elif action == "drink":
+			head_pitch = deg_to_rad(26.0)
 		elif action == "groom":
 			head_pitch = deg_to_rad(18.0)
 		elif action == "sleep":
@@ -768,15 +776,22 @@ func _build_wolf_visual() -> void:
 	torso_anchor.position = Vector3(0.0, 0.0, 0.0)
 	shell_root.add_child(torso_anchor)
 	_add_capsule(torso_anchor, Vector3(0.0, 0.62, -0.08), Vector3(0.95, 0.86, 1.5), fur, 0.34, 0.82)
+	_add_sphere(torso_anchor, Vector3(0.0, 0.7, 0.26), Vector3(1.08, 0.86, 1.0), fur, 0.22)
+	_add_sphere(torso_anchor, Vector3(0.0, 0.68, -0.62), Vector3(1.18, 0.9, 1.06), fur, 0.24)
 	_add_box(torso_anchor, Vector3(0.0, 0.76, -0.16), Vector3(0.36, 0.14, 1.34), accent)
+	_add_box(torso_anchor, Vector3(0.0, 0.45, 0.32), Vector3(0.24, 0.16, 0.46), fur)
+	_add_capsule(torso_anchor, Vector3(0.0, 0.7, 0.48), Vector3(0.44, 0.44, 0.82), fur, 0.14, 0.44, Vector3(deg_to_rad(26.0), 0.0, 0.0))
 
 	head_anchor = Node3D.new()
 	head_anchor.position = Vector3(0.0, 0.72, 0.72)
 	shell_root.add_child(head_anchor)
-	_add_sphere(head_anchor, Vector3(0.0, 0.02, 0.0), Vector3(0.95, 0.72, 1.18), fur, 0.26)
-	_add_box(head_anchor, Vector3(0.0, -0.04, 0.34), Vector3(0.16, 0.12, 0.46), accent)
-	_add_box(head_anchor, Vector3(-0.12, 0.22, -0.05), Vector3(0.08, 0.22, 0.08), accent, Vector3(0.0, 0.0, deg_to_rad(16.0)))
-	_add_box(head_anchor, Vector3(0.12, 0.22, -0.05), Vector3(0.08, 0.22, 0.08), accent, Vector3(0.0, 0.0, deg_to_rad(-16.0)))
+	_add_sphere(head_anchor, Vector3(0.0, 0.02, 0.0), Vector3(0.98, 0.76, 1.22), fur, 0.26)
+	_add_box(head_anchor, Vector3(0.0, -0.02, 0.34), Vector3(0.18, 0.13, 0.5), accent)
+	_add_box(head_anchor, Vector3(0.0, -0.1, 0.56), Vector3(0.1, 0.08, 0.16), accent)
+	_add_sphere(head_anchor, Vector3(-0.16, 0.05, 0.12), Vector3(0.82, 0.74, 0.9), fur, 0.1)
+	_add_sphere(head_anchor, Vector3(0.16, 0.05, 0.12), Vector3(0.82, 0.74, 0.9), fur, 0.1)
+	_add_box(head_anchor, Vector3(-0.12, 0.24, -0.05), Vector3(0.09, 0.26, 0.09), accent, Vector3(0.0, 0.0, deg_to_rad(16.0)))
+	_add_box(head_anchor, Vector3(0.12, 0.24, -0.05), Vector3(0.09, 0.26, 0.09), accent, Vector3(0.0, 0.0, deg_to_rad(-16.0)))
 	_add_sphere(head_anchor, Vector3(-0.1, 0.06, 0.32), Vector3.ONE, eye, 0.04)
 	_add_sphere(head_anchor, Vector3(0.1, 0.06, 0.32), Vector3.ONE, eye, 0.04)
 
@@ -784,6 +799,7 @@ func _build_wolf_visual() -> void:
 	tail_anchor.position = Vector3(0.0, 0.76, -0.94)
 	shell_root.add_child(tail_anchor)
 	_add_capsule(tail_anchor, Vector3(0.0, 0.0, -0.12), Vector3(0.28, 0.28, 0.96), accent, 0.08, 0.36, Vector3(deg_to_rad(30.0), 0.0, 0.0))
+	_add_box(tail_anchor, Vector3(0.0, 0.0, -0.56), Vector3(0.16, 0.14, 0.24), fur)
 
 	_add_leg(shell_root, Vector3(-0.3, _leg_mount_height(), 0.34), Vector3(0.1, 0.72, 0.1), fur)
 	_add_leg(shell_root, Vector3(0.3, _leg_mount_height(), 0.32), Vector3(0.1, 0.72, 0.1), fur)
@@ -799,12 +815,18 @@ func _build_boar_visual() -> void:
 	torso_anchor = Node3D.new()
 	shell_root.add_child(torso_anchor)
 	_add_capsule(torso_anchor, Vector3(0.0, 0.55, -0.06), Vector3(1.18, 0.9, 1.72), body_material, 0.38, 0.86)
+	_add_sphere(torso_anchor, Vector3(0.0, 0.7, 0.28), Vector3(1.12, 0.9, 0.96), body_material, 0.25)
+	_add_sphere(torso_anchor, Vector3(0.0, 0.64, -0.62), Vector3(1.22, 0.92, 1.02), body_material, 0.26)
 	_add_box(torso_anchor, Vector3(0.0, 0.84, 0.08), Vector3(0.12, 0.12, 0.68), material_palette.get("boar_mane", material_palette.get("coal")))
+	_add_box(torso_anchor, Vector3(0.0, 0.48, 0.28), Vector3(0.28, 0.18, 0.54), snout_material)
 
 	head_anchor = Node3D.new()
 	head_anchor.position = Vector3(0.0, 0.6, 0.76)
 	shell_root.add_child(head_anchor)
 	_add_box(head_anchor, Vector3(0.0, 0.0, 0.04), Vector3(0.54, 0.34, 0.82), snout_material)
+	_add_box(head_anchor, Vector3(0.0, -0.02, 0.44), Vector3(0.24, 0.16, 0.24), material_palette.get("coal"))
+	_add_box(head_anchor, Vector3(-0.16, 0.16, -0.08), Vector3(0.08, 0.14, 0.08), body_material, Vector3(0.0, 0.0, deg_to_rad(24.0)))
+	_add_box(head_anchor, Vector3(0.16, 0.16, -0.08), Vector3(0.08, 0.14, 0.08), body_material, Vector3(0.0, 0.0, deg_to_rad(-24.0)))
 	_add_box(head_anchor, Vector3(-0.14, -0.12, 0.42), Vector3(0.06, 0.18, 0.28), tusk_material, Vector3(0.0, 0.0, deg_to_rad(22.0)))
 	_add_box(head_anchor, Vector3(0.14, -0.12, 0.42), Vector3(0.06, 0.18, 0.28), tusk_material, Vector3(0.0, 0.0, deg_to_rad(-22.0)))
 
@@ -827,7 +849,10 @@ func _build_deer_visual() -> void:
 	torso_anchor = Node3D.new()
 	shell_root.add_child(torso_anchor)
 	_add_capsule(torso_anchor, Vector3(0.0, 0.82, -0.04), Vector3(0.9, 0.88, 1.52), fur, 0.28, 0.96)
+	_add_sphere(torso_anchor, Vector3(0.0, 0.96, 0.26), Vector3(0.96, 0.88, 0.92), fur, 0.2)
+	_add_sphere(torso_anchor, Vector3(0.0, 0.88, -0.58), Vector3(1.08, 0.94, 1.02), fur, 0.22)
 	_add_box(torso_anchor, Vector3(0.0, 0.68, 0.18), Vector3(0.22, 0.16, 0.52), undercoat)
+	_add_capsule(torso_anchor, Vector3(0.0, 1.12, 0.5), Vector3(0.32, 0.32, 0.92), fur, 0.12, 0.66, Vector3(deg_to_rad(18.0), 0.0, 0.0))
 
 	head_anchor = Node3D.new()
 	head_anchor.position = Vector3(0.0, 1.12, 0.82)
@@ -835,10 +860,14 @@ func _build_deer_visual() -> void:
 	_add_box(head_anchor, Vector3(0.0, -0.18, -0.34), Vector3(0.16, 0.58, 0.18), fur)
 	_add_sphere(head_anchor, Vector3(0.0, 0.06, 0.0), Vector3(0.9, 0.78, 1.08), fur, 0.22)
 	_add_box(head_anchor, Vector3(0.0, -0.02, 0.34), Vector3(0.14, 0.11, 0.46), undercoat)
+	_add_box(head_anchor, Vector3(-0.14, 0.12, -0.1), Vector3(0.06, 0.2, 0.08), fur, Vector3(0.0, 0.0, deg_to_rad(18.0)))
+	_add_box(head_anchor, Vector3(0.14, 0.12, -0.1), Vector3(0.06, 0.2, 0.08), fur, Vector3(0.0, 0.0, deg_to_rad(-18.0)))
 	_add_box(head_anchor, Vector3(-0.14, 0.22, -0.02), Vector3(0.06, 0.38, 0.06), antler, Vector3(0.0, 0.0, deg_to_rad(16.0)))
 	_add_box(head_anchor, Vector3(0.14, 0.22, -0.02), Vector3(0.06, 0.38, 0.06), antler, Vector3(0.0, 0.0, deg_to_rad(-16.0)))
 	_add_box(head_anchor, Vector3(-0.22, 0.42, -0.02), Vector3(0.22, 0.05, 0.05), antler, Vector3(0.0, 0.0, deg_to_rad(24.0)))
 	_add_box(head_anchor, Vector3(0.22, 0.42, -0.02), Vector3(0.22, 0.05, 0.05), antler, Vector3(0.0, 0.0, deg_to_rad(-24.0)))
+	_add_box(head_anchor, Vector3(-0.3, 0.52, 0.02), Vector3(0.12, 0.04, 0.04), antler, Vector3(0.0, 0.0, deg_to_rad(32.0)))
+	_add_box(head_anchor, Vector3(0.3, 0.52, 0.02), Vector3(0.12, 0.04, 0.04), antler, Vector3(0.0, 0.0, deg_to_rad(-32.0)))
 
 	tail_anchor = Node3D.new()
 	tail_anchor.position = Vector3(0.0, 0.96, -0.9)
@@ -860,7 +889,10 @@ func _build_fox_visual() -> void:
 	torso_anchor.position = Vector3(0.0, 0.0, 0.0)
 	shell_root.add_child(torso_anchor)
 	_add_capsule(torso_anchor, Vector3(0.0, 0.52, -0.06), Vector3(0.78, 0.7, 1.28), fur, 0.26, 0.72)
+	_add_sphere(torso_anchor, Vector3(0.0, 0.58, 0.2), Vector3(0.94, 0.78, 0.9), fur, 0.18)
+	_add_sphere(torso_anchor, Vector3(0.0, 0.54, -0.5), Vector3(1.02, 0.8, 0.98), fur, 0.2)
 	_add_box(torso_anchor, Vector3(0.0, 0.45, 0.22), Vector3(0.2, 0.12, 0.42), chest)
+	_add_capsule(torso_anchor, Vector3(0.0, 0.64, 0.42), Vector3(0.28, 0.28, 0.72), chest, 0.1, 0.4, Vector3(deg_to_rad(26.0), 0.0, 0.0))
 
 	head_anchor = Node3D.new()
 	head_anchor.position = Vector3(0.0, 0.62, 0.66)
@@ -869,6 +901,7 @@ func _build_fox_visual() -> void:
 	_add_box(head_anchor, Vector3(0.0, -0.02, 0.3), Vector3(0.13, 0.1, 0.38), chest)
 	_add_box(head_anchor, Vector3(-0.11, 0.18, -0.04), Vector3(0.07, 0.2, 0.07), accent, Vector3(0.0, 0.0, deg_to_rad(18.0)))
 	_add_box(head_anchor, Vector3(0.11, 0.18, -0.04), Vector3(0.07, 0.2, 0.07), accent, Vector3(0.0, 0.0, deg_to_rad(-18.0)))
+	_add_box(head_anchor, Vector3(0.0, -0.08, 0.44), Vector3(0.08, 0.06, 0.12), accent)
 
 	tail_anchor = Node3D.new()
 	tail_anchor.position = Vector3(0.0, 0.62, -0.82)
@@ -893,6 +926,8 @@ func _build_scavenger_visual() -> void:
 	_add_capsule(torso_anchor, Vector3(0.0, 0.98, 0.0), Vector3(0.88, 1.0, 0.84), robe, 0.32, 0.84)
 	_add_box(torso_anchor, Vector3(0.0, 0.54, 0.02), Vector3(0.72, 0.62, 0.48), robe)
 	_add_box(torso_anchor, Vector3(0.0, 1.06, -0.34), Vector3(0.34, 0.42, 0.16), pack)
+	_add_box(torso_anchor, Vector3(-0.44, 1.0, 0.04), Vector3(0.12, 0.54, 0.12), robe)
+	_add_box(torso_anchor, Vector3(0.44, 1.0, 0.04), Vector3(0.12, 0.54, 0.12), robe)
 
 	head_anchor = Node3D.new()
 	head_anchor.position = Vector3(0.0, 1.56, 0.08)
@@ -900,6 +935,7 @@ func _build_scavenger_visual() -> void:
 	_add_sphere(head_anchor, Vector3(0.0, 0.0, 0.0), Vector3(0.7, 0.78, 0.74), skin, 0.24)
 	_add_box(head_anchor, Vector3(0.0, 0.08, -0.12), Vector3(0.52, 0.28, 0.46), robe)
 	_add_box(head_anchor, Vector3(0.0, -0.34, 0.18), Vector3(0.42, 0.08, 0.12), trim)
+	_add_box(head_anchor, Vector3(0.0, 0.18, -0.22), Vector3(0.58, 0.14, 0.54), robe)
 
 	_add_leg(shell_root, Vector3(-0.42, 1.02, 0.02), Vector3(0.12, 0.56, 0.12), robe, true)
 	_add_leg(shell_root, Vector3(0.42, 1.02, 0.02), Vector3(0.12, 0.56, 0.12), robe, true)
@@ -913,13 +949,29 @@ func _add_leg(parent: Node3D, mount_position: Vector3, size: Vector3, material: 
 	parent.add_child(pivot)
 	leg_nodes.append(pivot)
 
-	var limb := MeshInstance3D.new()
-	var mesh := BoxMesh.new()
-	mesh.size = size
-	limb.mesh = mesh
-	limb.position = Vector3(0.0, -size.y * 0.5, 0.0) if not horizontal else Vector3(0.0, -size.y * 0.32, 0.0)
-	limb.material_override = material
-	pivot.add_child(limb)
+	var upper := MeshInstance3D.new()
+	var upper_mesh := BoxMesh.new()
+	upper_mesh.size = size
+	upper.mesh = upper_mesh
+	upper.position = Vector3(0.0, -size.y * 0.32, 0.0) if horizontal else Vector3(0.0, -size.y * 0.42, 0.0)
+	upper.material_override = material
+	pivot.add_child(upper)
+
+	var lower := MeshInstance3D.new()
+	var lower_mesh := BoxMesh.new()
+	lower_mesh.size = Vector3(size.x * 0.74, size.y * 0.62, size.z * 0.74)
+	lower.mesh = lower_mesh
+	lower.position = Vector3(0.0, -size.y * 0.88, 0.0) if not horizontal else Vector3(0.0, -size.y * 0.68, 0.0)
+	lower.material_override = material
+	pivot.add_child(lower)
+
+	var foot := MeshInstance3D.new()
+	var foot_mesh := BoxMesh.new()
+	foot_mesh.size = Vector3(size.x * 1.15, max(0.06, size.y * 0.12), size.z * (1.42 if horizontal else 1.24))
+	foot.mesh = foot_mesh
+	foot.position = Vector3(0.0, -size.y * 1.18, size.z * 0.08) if not horizontal else Vector3(0.0, -size.y * 0.96, size.z * 0.1)
+	foot.material_override = material
+	pivot.add_child(foot)
 
 
 func _add_box(parent: Node3D, position: Vector3, size: Vector3, material: Material, rotation_value: Vector3 = Vector3.ZERO) -> void:

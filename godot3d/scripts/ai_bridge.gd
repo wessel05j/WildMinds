@@ -7,7 +7,7 @@ signal status_ready(payload: Dictionary)
 signal request_failed(message: String)
 
 var service_url := "http://127.0.0.1:8765"
-var max_concurrent_requests := 2
+var max_concurrent_requests := 3
 var queued_requests: Array[Dictionary] = []
 var pending_ids: Array[String] = []
 var active_requests := 0
