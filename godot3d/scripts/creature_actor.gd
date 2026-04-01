@@ -46,15 +46,18 @@ var shell_root: Node3D
 var torso_anchor: Node3D
 var head_anchor: Node3D
 var tail_anchor: Node3D
+var ear_nodes: Array[Node3D] = []
 var leg_nodes: Array[Node3D] = []
 var shadow_mesh: MeshInstance3D
 var stride_phase_offset := 0.0
+var breath_phase_offset := 0.0
 var sound_cooldown := 0.0
 
 
 func _ready() -> void:
 	floor_snap_length = 0.45
 	stride_phase_offset = randf() * TAU
+	breath_phase_offset = randf() * TAU
 	_build_visuals()
 
 
@@ -463,8 +466,10 @@ func _animate_visuals(horizontal: Vector3, delta: float, action: String) -> void
 	var sound_name := str(decision.get("sound", "none"))
 	var stride: float = clampf(horizontal.length() / max(_species_speed(), 0.1), 0.0, 1.0)
 	var gait_time := Time.get_ticks_msec() / 1000.0 * (7.5 if species == "scavenger" else 8.8) + stride_phase_offset
+	var breath_time := Time.get_ticks_msec() / 1000.0 * 1.9 + breath_phase_offset
 	var base_height := _body_base_height()
 	var bob_strength := 0.02 * stride
+	var breath_bob := (0.016 + (0.006 if posture == "sleep" else 0.0)) * (1.0 - stride)
 	match posture:
 		"low", "crouch":
 			base_height -= 0.12 if species != "scavenger" else 0.08
@@ -475,7 +480,7 @@ func _animate_visuals(horizontal: Vector3, delta: float, action: String) -> void
 		"sleep":
 			base_height -= 0.34 if species != "scavenger" else 0.26
 			bob_strength = 0.004
-	body_root.position.y = lerpf(body_root.position.y, base_height + sin(gait_time * 2.0) * bob_strength, delta * 10.0)
+	body_root.position.y = lerpf(body_root.position.y, base_height + sin(gait_time * 2.0) * bob_strength + sin(breath_time) * breath_bob, delta * 10.0)
 
 	var pitch_target := 0.0
 	if action == "attack":
@@ -498,14 +503,19 @@ func _animate_visuals(horizontal: Vector3, delta: float, action: String) -> void
 			pitch_target += deg_to_rad(-18.0)
 
 	body_root.rotation.x = lerpf(body_root.rotation.x, pitch_target, delta * 8.0)
-	body_root.rotation.z = lerpf(body_root.rotation.z, sin(gait_time) * 0.025 * stride, delta * 7.0)
+	body_root.rotation.z = lerpf(body_root.rotation.z, sin(gait_time) * 0.025 * stride + sin(breath_time * 0.5) * 0.01 * (1.0 - stride), delta * 7.0)
+	if torso_anchor != null:
+		torso_anchor.rotation.y = lerpf(torso_anchor.rotation.y, sin(gait_time * 0.5) * 0.05 * stride, delta * 8.0)
 
 	if head_anchor != null:
-		var head_pitch := -pitch_target * 0.35 + sin(gait_time + 0.4) * 0.05 * stride
+		var head_pitch: float = -pitch_target * 0.35 + sin(gait_time + 0.4) * 0.05 * stride
+		var head_yaw: float = sin(gait_time * 0.6) * 0.08 * max(stride, 0.2 if action == "listen" else 0.0)
 		if action == "listen":
 			head_pitch = deg_to_rad(-10.0) + sin(gait_time * 0.9) * 0.05
+			head_yaw = sin(gait_time * 1.2) * 0.22
 		elif action == "sniff":
 			head_pitch = deg_to_rad(12.0) + sin(gait_time * 2.8) * 0.12
+			head_yaw = sin(gait_time * 1.8) * 0.12
 		elif action == "eat":
 			head_pitch = deg_to_rad(18.0)
 		elif action == "drink":
@@ -514,10 +524,14 @@ func _animate_visuals(horizontal: Vector3, delta: float, action: String) -> void
 			head_pitch = deg_to_rad(18.0)
 		elif action == "sleep":
 			head_pitch = deg_to_rad(24.0)
+			head_yaw = 0.0
+		elif action in ["idle_watch", "rest", "sit"] and stride < 0.12:
+			head_yaw = sin(breath_time * 0.7) * 0.18
+			head_pitch += sin(breath_time * 0.9) * 0.04
 		if sound_name in ["howl", "bark", "whine", "squeal"]:
 			head_pitch += deg_to_rad(-20.0)
 		head_anchor.rotation.x = lerpf(head_anchor.rotation.x, head_pitch, delta * 9.0)
-		head_anchor.rotation.y = lerpf(head_anchor.rotation.y, sin(gait_time * 0.6) * 0.08 * max(stride, 0.2 if action == "listen" else 0.0), delta * 7.0)
+		head_anchor.rotation.y = lerpf(head_anchor.rotation.y, head_yaw, delta * 7.0)
 	if tail_anchor != null:
 		var tail_swing := 0.18 if species == "scavenger" else 0.34
 		if action in ["flee", "attack"]:
@@ -525,13 +539,26 @@ func _animate_visuals(horizontal: Vector3, delta: float, action: String) -> void
 		elif posture == "sleep":
 			tail_swing *= 0.2
 		tail_anchor.rotation.y = lerpf(tail_anchor.rotation.y, sin(gait_time * 1.1) * tail_swing * max(stride, 0.2), delta * 8.0)
-		tail_anchor.rotation.x = lerpf(tail_anchor.rotation.x, deg_to_rad(12.0) - pitch_target * 0.3, delta * 8.0)
+		tail_anchor.rotation.x = lerpf(tail_anchor.rotation.x, deg_to_rad(12.0) - pitch_target * 0.3 + sin(breath_time * 0.8) * 0.05 * (1.0 - stride), delta * 8.0)
+
+	for ear_index in range(ear_nodes.size()):
+		var ear := ear_nodes[ear_index]
+		var side := -1.0 if ear_index % 2 == 0 else 1.0
+		var twitch := sin(breath_time * (2.6 + ear_index * 0.2) + side) * 0.12
+		var alert_lift := 0.1 if action in ["listen", "stalk", "attack"] else 0.0
+		var sleep_drop := -0.22 if posture == "sleep" else (-0.1 if posture == "sit" else 0.0)
+		ear.rotation.x = lerpf(ear.rotation.x, alert_lift + sleep_drop + twitch * (0.25 if stride < 0.2 else 0.12), delta * 10.0)
+		ear.rotation.y = lerpf(ear.rotation.y, side * (0.06 + twitch * 0.35), delta * 10.0)
 
 	for index in range(leg_nodes.size()):
 		var leg := leg_nodes[index]
 		var phase_shift := PI if index % 2 == 1 else 0.0
 		if species == "boar":
 			phase_shift += PI * 0.1 if index < 2 else -PI * 0.1
+		elif species == "deer":
+			phase_shift += PI * 0.06 if index < 2 else -PI * 0.04
+		elif species == "fox":
+			phase_shift += PI * 0.04 if index % 2 == 0 else -PI * 0.04
 		var leg_angle := sin(gait_time + phase_shift) * 0.62 * stride
 		var lift_amount: float = abs(sin(gait_time + phase_shift)) * 0.04 * stride
 		if action in ["rest", "idle_watch", "listen", "make_sound", "groom"]:
@@ -720,6 +747,7 @@ func _collision_center_y() -> float:
 func _build_visuals() -> void:
 	for child in get_children():
 		child.queue_free()
+	ear_nodes.clear()
 	leg_nodes.clear()
 	torso_anchor = null
 	head_anchor = null
@@ -790,8 +818,8 @@ func _build_wolf_visual() -> void:
 	_add_box(head_anchor, Vector3(0.0, -0.1, 0.56), Vector3(0.1, 0.08, 0.16), accent)
 	_add_sphere(head_anchor, Vector3(-0.16, 0.05, 0.12), Vector3(0.82, 0.74, 0.9), fur, 0.1)
 	_add_sphere(head_anchor, Vector3(0.16, 0.05, 0.12), Vector3(0.82, 0.74, 0.9), fur, 0.1)
-	_add_box(head_anchor, Vector3(-0.12, 0.24, -0.05), Vector3(0.09, 0.26, 0.09), accent, Vector3(0.0, 0.0, deg_to_rad(16.0)))
-	_add_box(head_anchor, Vector3(0.12, 0.24, -0.05), Vector3(0.09, 0.26, 0.09), accent, Vector3(0.0, 0.0, deg_to_rad(-16.0)))
+	_add_ear(head_anchor, Vector3(-0.12, 0.24, -0.05), Vector3(0.09, 0.26, 0.09), accent, Vector3(0.0, 0.0, deg_to_rad(16.0)))
+	_add_ear(head_anchor, Vector3(0.12, 0.24, -0.05), Vector3(0.09, 0.26, 0.09), accent, Vector3(0.0, 0.0, deg_to_rad(-16.0)))
 	_add_sphere(head_anchor, Vector3(-0.1, 0.06, 0.32), Vector3.ONE, eye, 0.04)
 	_add_sphere(head_anchor, Vector3(0.1, 0.06, 0.32), Vector3.ONE, eye, 0.04)
 
@@ -825,8 +853,8 @@ func _build_boar_visual() -> void:
 	shell_root.add_child(head_anchor)
 	_add_box(head_anchor, Vector3(0.0, 0.0, 0.04), Vector3(0.54, 0.34, 0.82), snout_material)
 	_add_box(head_anchor, Vector3(0.0, -0.02, 0.44), Vector3(0.24, 0.16, 0.24), material_palette.get("coal"))
-	_add_box(head_anchor, Vector3(-0.16, 0.16, -0.08), Vector3(0.08, 0.14, 0.08), body_material, Vector3(0.0, 0.0, deg_to_rad(24.0)))
-	_add_box(head_anchor, Vector3(0.16, 0.16, -0.08), Vector3(0.08, 0.14, 0.08), body_material, Vector3(0.0, 0.0, deg_to_rad(-24.0)))
+	_add_ear(head_anchor, Vector3(-0.16, 0.16, -0.08), Vector3(0.08, 0.14, 0.08), body_material, Vector3(0.0, 0.0, deg_to_rad(24.0)))
+	_add_ear(head_anchor, Vector3(0.16, 0.16, -0.08), Vector3(0.08, 0.14, 0.08), body_material, Vector3(0.0, 0.0, deg_to_rad(-24.0)))
 	_add_box(head_anchor, Vector3(-0.14, -0.12, 0.42), Vector3(0.06, 0.18, 0.28), tusk_material, Vector3(0.0, 0.0, deg_to_rad(22.0)))
 	_add_box(head_anchor, Vector3(0.14, -0.12, 0.42), Vector3(0.06, 0.18, 0.28), tusk_material, Vector3(0.0, 0.0, deg_to_rad(-22.0)))
 
@@ -860,8 +888,8 @@ func _build_deer_visual() -> void:
 	_add_box(head_anchor, Vector3(0.0, -0.18, -0.34), Vector3(0.16, 0.58, 0.18), fur)
 	_add_sphere(head_anchor, Vector3(0.0, 0.06, 0.0), Vector3(0.9, 0.78, 1.08), fur, 0.22)
 	_add_box(head_anchor, Vector3(0.0, -0.02, 0.34), Vector3(0.14, 0.11, 0.46), undercoat)
-	_add_box(head_anchor, Vector3(-0.14, 0.12, -0.1), Vector3(0.06, 0.2, 0.08), fur, Vector3(0.0, 0.0, deg_to_rad(18.0)))
-	_add_box(head_anchor, Vector3(0.14, 0.12, -0.1), Vector3(0.06, 0.2, 0.08), fur, Vector3(0.0, 0.0, deg_to_rad(-18.0)))
+	_add_ear(head_anchor, Vector3(-0.14, 0.12, -0.1), Vector3(0.06, 0.2, 0.08), fur, Vector3(0.0, 0.0, deg_to_rad(18.0)))
+	_add_ear(head_anchor, Vector3(0.14, 0.12, -0.1), Vector3(0.06, 0.2, 0.08), fur, Vector3(0.0, 0.0, deg_to_rad(-18.0)))
 	_add_box(head_anchor, Vector3(-0.14, 0.22, -0.02), Vector3(0.06, 0.38, 0.06), antler, Vector3(0.0, 0.0, deg_to_rad(16.0)))
 	_add_box(head_anchor, Vector3(0.14, 0.22, -0.02), Vector3(0.06, 0.38, 0.06), antler, Vector3(0.0, 0.0, deg_to_rad(-16.0)))
 	_add_box(head_anchor, Vector3(-0.22, 0.42, -0.02), Vector3(0.22, 0.05, 0.05), antler, Vector3(0.0, 0.0, deg_to_rad(24.0)))
@@ -899,8 +927,8 @@ func _build_fox_visual() -> void:
 	shell_root.add_child(head_anchor)
 	_add_sphere(head_anchor, Vector3(0.0, 0.02, 0.0), Vector3(0.88, 0.68, 1.08), fur, 0.2)
 	_add_box(head_anchor, Vector3(0.0, -0.02, 0.3), Vector3(0.13, 0.1, 0.38), chest)
-	_add_box(head_anchor, Vector3(-0.11, 0.18, -0.04), Vector3(0.07, 0.2, 0.07), accent, Vector3(0.0, 0.0, deg_to_rad(18.0)))
-	_add_box(head_anchor, Vector3(0.11, 0.18, -0.04), Vector3(0.07, 0.2, 0.07), accent, Vector3(0.0, 0.0, deg_to_rad(-18.0)))
+	_add_ear(head_anchor, Vector3(-0.11, 0.18, -0.04), Vector3(0.07, 0.2, 0.07), accent, Vector3(0.0, 0.0, deg_to_rad(18.0)))
+	_add_ear(head_anchor, Vector3(0.11, 0.18, -0.04), Vector3(0.07, 0.2, 0.07), accent, Vector3(0.0, 0.0, deg_to_rad(-18.0)))
 	_add_box(head_anchor, Vector3(0.0, -0.08, 0.44), Vector3(0.08, 0.06, 0.12), accent)
 
 	tail_anchor = Node3D.new()
@@ -972,6 +1000,22 @@ func _add_leg(parent: Node3D, mount_position: Vector3, size: Vector3, material: 
 	foot.position = Vector3(0.0, -size.y * 1.18, size.z * 0.08) if not horizontal else Vector3(0.0, -size.y * 0.96, size.z * 0.1)
 	foot.material_override = material
 	pivot.add_child(foot)
+
+
+func _add_ear(parent: Node3D, position: Vector3, size: Vector3, material: Material, rotation_value: Vector3 = Vector3.ZERO) -> void:
+	var pivot := Node3D.new()
+	pivot.position = position
+	pivot.rotation = rotation_value
+	parent.add_child(pivot)
+	ear_nodes.append(pivot)
+
+	var ear := MeshInstance3D.new()
+	var mesh := BoxMesh.new()
+	mesh.size = size
+	ear.mesh = mesh
+	ear.position = Vector3(0.0, size.y * 0.5, 0.0)
+	ear.material_override = material
+	pivot.add_child(ear)
 
 
 func _add_box(parent: Node3D, position: Vector3, size: Vector3, material: Material, rotation_value: Vector3 = Vector3.ZERO) -> void:

@@ -6,9 +6,9 @@ const ResourceNode3D = preload("res://scripts/resource_node.gd")
 const CampfireNode = preload("res://scripts/campfire.gd")
 const AIBridge = preload("res://scripts/ai_bridge.gd")
 
-const WORLD_RADIUS := 420.0
-const CONTENT_RADIUS := 364.0
-const TERRAIN_RESOLUTION := 196
+const WORLD_RADIUS := 520.0
+const CONTENT_RADIUS := 468.0
+const TERRAIN_RESOLUTION := 220
 const DAY_CYCLE_SPEED := 0.00155
 const RESOURCE_CONFIG := [
 	{"kind": "berries", "count": 54, "amount": 4},
@@ -78,6 +78,8 @@ var ridge_noise := FastNoiseLite.new()
 var mountain_noise := FastNoiseLite.new()
 var continental_noise := FastNoiseLite.new()
 var erosion_noise := FastNoiseLite.new()
+var river_noise := FastNoiseLite.new()
+var shelf_noise := FastNoiseLite.new()
 var world_root: Node3D
 var terrain_mesh_instance: MeshInstance3D
 var terrain_body: StaticBody3D
@@ -113,6 +115,8 @@ var quest_label: Label
 var tower_hint_label: Label
 var inventory_slots := {}
 var item_icon_cache := {}
+var cloud_fields: Array = []
+var foliage_sway_nodes: Array = []
 
 var status_message := ""
 var status_timer := 0.0
@@ -338,6 +342,16 @@ func _prepare_noises() -> void:
 	erosion_noise.frequency = 0.016
 	erosion_noise.fractal_octaves = 4
 
+	river_noise.seed = randi()
+	river_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	river_noise.frequency = 0.0036
+	river_noise.fractal_octaves = 3
+
+	shelf_noise.seed = randi()
+	shelf_noise.noise_type = FastNoiseLite.TYPE_PERLIN
+	shelf_noise.frequency = 0.0072
+	shelf_noise.fractal_octaves = 3
+
 
 func _build_material_library() -> void:
 	var terrain_material := _make_material(Color(0.38, 0.47, 0.31), 0.98, 0.0, Color(0.0, 0.0, 0.0), _make_noise_texture(14, 0.03))
@@ -384,6 +398,8 @@ func _build_material_library() -> void:
 		"tower_glow": _make_material(Color(0.96, 0.84, 0.38, 0.88), 0.18, 0.0, Color(0.82, 0.62, 0.18), null, true),
 		"ruin_stone": _make_material(Color(0.56, 0.56, 0.5), 0.98, 0.0, Color(0.0, 0.0, 0.0), _make_noise_texture(173, 0.09)),
 		"canvas": _make_material(Color(0.74, 0.68, 0.54), 0.95),
+		"cloud": _make_material(Color(0.94, 0.96, 0.98, 0.46), 1.0, 0.0, Color(0.14, 0.14, 0.14), _make_noise_texture(181, 0.025), true),
+		"mist": _make_material(Color(0.73, 0.81, 0.84, 0.18), 1.0, 0.0, Color(0.0, 0.0, 0.0), null, true),
 		"water": _make_material(Color(0.15, 0.32, 0.37, 0.72), 0.12, 0.02, Color(0.02, 0.05, 0.06), _make_noise_texture(132, 0.04), true),
 	}
 
@@ -430,12 +446,12 @@ func _build_environment() -> void:
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	environment.ambient_light_energy = 1.28
 	environment.fog_enabled = true
-	environment.fog_density = 0.00078
-	environment.fog_light_color = Color(0.54, 0.63, 0.67)
+	environment.fog_density = 0.00062
+	environment.fog_light_color = Color(0.56, 0.66, 0.7)
 	environment.tonemap_mode = Environment.TONE_MAPPER_ACES
 	environment.adjustment_enabled = true
-	environment.adjustment_saturation = 1.08
-	environment.adjustment_contrast = 1.06
+	environment.adjustment_saturation = 1.1
+	environment.adjustment_contrast = 1.08
 
 	sky_material = ProceduralSkyMaterial.new()
 	sky_material.sky_top_color = Color(0.33, 0.49, 0.72)
@@ -457,7 +473,7 @@ func _build_environment() -> void:
 	sun_light.shadow_blur = 0.8
 	sun_light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun_light.directional_shadow_blend_splits = true
-	sun_light.directional_shadow_max_distance = 360.0
+	sun_light.directional_shadow_max_distance = 420.0
 	sun_light.shadow_bias = 0.03
 	sun_light.shadow_normal_bias = 1.2
 	sun_light.rotation_degrees = Vector3(-48.0, 32.0, 0.0)
@@ -476,6 +492,7 @@ func _build_world() -> void:
 	add_child(world_root)
 	_build_terrain()
 	_spawn_backdrop_ridges()
+	_spawn_cloud_fields()
 	_spawn_landscape_props()
 	_spawn_landmarks()
 	_spawn_player()
@@ -529,6 +546,43 @@ func _spawn_backdrop_ridges() -> void:
 			ridge.add_child(mesh_instance)
 
 
+func _spawn_cloud_fields() -> void:
+	cloud_fields.clear()
+	for layer_index in range(3):
+		var cloud_root := Node3D.new()
+		cloud_root.position = Vector3(0.0, 58.0 + layer_index * 18.0, 0.0)
+		world_root.add_child(cloud_root)
+		var cloud_entries: Array = []
+		for cloud_index in range(14):
+			var pivot := Node3D.new()
+			var angle := TAU * float(cloud_index) / 14.0 + randf_range(-0.22, 0.22)
+			var radius := WORLD_RADIUS * (0.72 + layer_index * 0.16) + randf_range(-85.0, 85.0)
+			pivot.position = Vector3(cos(angle) * radius, randf_range(-5.0, 8.0), sin(angle) * radius)
+			pivot.rotation_degrees.y = randf_range(0.0, 360.0)
+			cloud_root.add_child(pivot)
+
+			for blob_index in range(4 + randi() % 3):
+				var blob := MeshInstance3D.new()
+				var mesh := SphereMesh.new()
+				mesh.radius = randf_range(5.2, 9.8)
+				mesh.height = mesh.radius * randf_range(1.1, 1.45)
+				blob.mesh = mesh
+				blob.position = Vector3(randf_range(-12.0, 12.0), randf_range(-3.0, 3.0), randf_range(-8.0, 8.0))
+				blob.scale = Vector3(1.0 + randf() * 1.4, 0.48 + randf() * 0.32, 0.84 + randf() * 0.7)
+				blob.material_override = material_palette.get("cloud")
+				pivot.add_child(blob)
+
+			cloud_entries.append(
+				{
+					"pivot": pivot,
+					"radius": radius,
+					"angle": angle,
+					"speed": randf_range(0.006, 0.014) * (1.0 + layer_index * 0.18),
+				}
+			)
+		cloud_fields.append({"root": cloud_root, "entries": cloud_entries, "height": cloud_root.position.y})
+
+
 func _generate_terrain_mesh() -> ArrayMesh:
 	var surface_tool := SurfaceTool.new()
 	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -567,16 +621,20 @@ func _terrain_height(x_value: float, z_value: float) -> float:
 	var broad_shape := terrain_noise.get_noise_2d(x_value, z_value) * 5.1
 	var detail_shape := detail_noise.get_noise_2d(x_value * 1.45, z_value * 1.45) * 1.2
 	var erosion_shape := erosion_noise.get_noise_2d(x_value, z_value) * 2.2
+	var shelf_shape: float = shelf_noise.get_noise_2d(x_value, z_value) * 1.8
 	var ridge_shape: float = abs(ridge_noise.get_noise_2d(x_value, z_value)) * 5.1
 	var plateau_mask: float = clampf((continental_shape + 0.08) * 1.15, 0.0, 1.0)
 	var mountain_mask: float = clampf((mountain_noise.get_noise_2d(x_value, z_value) + 0.12) * 1.2 + plateau_mask * 0.28, 0.0, 1.0)
 	var mountain_shape: float = pow(mountain_mask, 2.9) * 28.0 + ridge_shape * mountain_mask * 1.8
 	var basin_shape: float = -pow(max(0.0, -continental_shape - 0.14), 2.0) * 8.5
 	var uplift_shape: float = plateau_mask * 5.8
+	var river_channel: float = 1.0 - abs(river_noise.get_noise_2d(x_value, z_value))
+	var river_cut: float = smoothstep(0.78, 0.96, river_channel) * (3.6 + max(0.0, -continental_shape) * 5.5)
+	var ravine_cut: float = smoothstep(0.66, 0.9, 1.0 - abs(ridge_noise.get_noise_2d(x_value * 0.62, z_value * 0.62))) * mountain_mask * 3.2
 	var edge_ratio: float = clampf(Vector2(x_value, z_value).length() / WORLD_RADIUS, 0.0, 1.0)
-	var far_falloff := smoothstep(0.93, 1.0, edge_ratio) * 6.0
+	var far_falloff := smoothstep(0.965, 1.0, edge_ratio) * 10.0
 	var valley_soften: float = -abs(detail_noise.get_noise_2d(x_value * 0.52, z_value * 0.52)) * 1.2
-	return continental_shape * 4.8 + broad_shape + detail_shape + erosion_shape + mountain_shape + uplift_shape + basin_shape + valley_soften - far_falloff
+	return continental_shape * 4.8 + broad_shape + detail_shape + erosion_shape + shelf_shape + mountain_shape + uplift_shape + basin_shape + valley_soften - river_cut - ravine_cut - far_falloff
 
 
 func _terrain_vertex_color(vertex: Vector3) -> Color:
@@ -593,8 +651,12 @@ func _terrain_vertex_color(vertex: Vector3) -> Color:
 			base_color = Color(0.44, 0.54, 0.27)
 		"wetland":
 			base_color = Color(0.29, 0.38, 0.27)
+		"scrub":
+			base_color = Color(0.47, 0.43, 0.25)
 		"alpine":
 			base_color = Color(0.48, 0.47, 0.43)
+		"barren":
+			base_color = Color(0.41, 0.37, 0.33)
 		_:
 			base_color = Color(0.41, 0.35, 0.27)
 
@@ -608,22 +670,29 @@ func _biome_name(x_value: float, z_value: float, height_value: float = INF) -> S
 	var height := height_value if height_value != INF else _terrain_height(x_value, z_value)
 	if height < -1.25:
 		return "wetland"
+	var river_channel: float = 1.0 - abs(river_noise.get_noise_2d(x_value, z_value))
+	if river_channel > 0.92 and height < 3.6:
+		return "wetland"
 	if height > 16.0:
 		return "alpine"
 	var biome_sample := biome_noise.get_noise_2d(x_value, z_value)
 	var continental_shape: float = continental_noise.get_noise_2d(x_value, z_value)
+	if height > 10.5 and biome_sample > 0.1:
+		return "barren"
 	if height > 6.5 or continental_shape > 0.22:
 		return "highland"
+	if biome_sample > 0.22 and continental_shape < 0.0:
+		return "scrub"
 	if biome_sample < -0.18:
 		return "forest"
 	return "meadow"
 
 
 func _spawn_landscape_props() -> void:
-	for _index in range(260):
+	for _index in range(340):
 		var point := random_world_point(-0.2)
 		var biome_name := _biome_name(point.x, point.z, point.y)
-		if biome_name in ["highland", "alpine"]:
+		if biome_name in ["highland", "alpine", "barren"]:
 			if randf() < 0.78:
 				_spawn_rock_cluster(point, randf_range(0.9, 1.6))
 			else:
@@ -637,33 +706,52 @@ func _spawn_landscape_props() -> void:
 				_spawn_tree(point, randf_range(0.82, 1.1), biome_name)
 			else:
 				_spawn_rock_cluster(point, randf_range(0.65, 1.0))
+		elif biome_name == "scrub":
+			if randf() < 0.38:
+				_spawn_shrub_cluster(point, randf_range(0.9, 1.35), biome_name)
+			elif randf() < 0.62:
+				_spawn_dead_tree(point, randf_range(0.8, 1.2))
+			else:
+				_spawn_rock_cluster(point, randf_range(0.85, 1.28))
 		else:
 			if randf() < 0.65:
 				_spawn_tree(point, randf_range(0.78, 1.12), biome_name)
 			else:
 				_spawn_rock_cluster(point, randf_range(0.75, 1.2))
 
-	for _index in range(180):
+	for _index in range(220):
 		_spawn_rock_cluster(random_world_point(-0.45), randf_range(0.8, 1.5))
 
-	for _index in range(420):
+	for _index in range(520):
 		_spawn_grass_patch(random_world_point(-0.2), randf_range(0.75, 1.35))
 
-	for _index in range(130):
+	for _index in range(160):
 		var wetland_point := _random_point_in_biomes(["wetland"], -0.7)
 		_spawn_reed_clump(wetland_point, randf_range(0.85, 1.3))
 
-	for _index in range(140):
+	for _index in range(170):
 		var flower_point := _random_point_in_biomes(["meadow", "forest"], -0.2)
 		_spawn_flower_patch(flower_point, randf_range(0.78, 1.1))
 
-	for _index in range(48):
+	for _index in range(70):
 		var log_point := _random_point_in_biomes(["forest", "meadow"], -0.15)
 		_spawn_fallen_log(log_point, randf_range(0.8, 1.35))
 
-	for _index in range(18):
-		var outcrop_point := _random_point_in_biomes(["highland", "alpine"], 3.5)
+	for _index in range(30):
+		var outcrop_point := _random_point_in_biomes(["highland", "alpine", "barren"], 3.5)
 		_spawn_cliff_outcrop(outcrop_point, randf_range(1.25, 2.1))
+
+	for _index in range(26):
+		var scrub_point := _random_point_in_biomes(["scrub", "meadow"], 0.2)
+		_spawn_shrub_cluster(scrub_point, randf_range(0.9, 1.4), biome_at(scrub_point))
+
+	for _index in range(12):
+		var dead_tree_point := _random_point_in_biomes(["scrub", "alpine", "highland"], 2.0)
+		_spawn_dead_tree(dead_tree_point, randf_range(0.88, 1.35))
+
+	for _index in range(14):
+		var stone_spire_point := _random_point_in_biomes(["alpine", "barren"], 8.0)
+		_spawn_stone_spire(stone_spire_point, randf_range(1.1, 1.75))
 
 
 func _spawn_tree(position_value: Vector3, scale_factor: float, biome_name: String = "forest") -> void:
@@ -677,6 +765,8 @@ func _spawn_tree(position_value: Vector3, scale_factor: float, biome_name: Strin
 		canopy_material = material_palette["foliage_wetland"]
 	elif biome_name in ["highland", "alpine"]:
 		canopy_material = material_palette["foliage_forest"]
+	elif biome_name == "scrub":
+		canopy_material = material_palette["foliage_meadow"]
 
 	var trunk := MeshInstance3D.new()
 	var trunk_mesh := CylinderMesh.new()
@@ -693,6 +783,10 @@ func _spawn_tree(position_value: Vector3, scale_factor: float, biome_name: Strin
 		trunk.position.y = 1.9 * scale_factor
 		trunk_mesh.top_radius = 0.12 * scale_factor
 		trunk_mesh.bottom_radius = 0.22 * scale_factor
+	elif biome_name == "scrub":
+		trunk.rotation_degrees.z = randf_range(-14.0, 14.0)
+		trunk_mesh.height = 2.1 * scale_factor
+		trunk.position.y = 1.05 * scale_factor
 	tree.add_child(trunk)
 
 	if biome_name in ["highland", "alpine"]:
@@ -725,6 +819,21 @@ func _spawn_tree(position_value: Vector3, scale_factor: float, biome_name: Strin
 			canopy.scale = canopy_data["scale"]
 			canopy.material_override = canopy_material
 			tree.add_child(canopy)
+	elif biome_name == "scrub":
+		for canopy_data in [
+			{"position": Vector3(-0.28, 1.84, 0.18), "scale": Vector3(0.86, 0.72, 0.8)},
+			{"position": Vector3(0.22, 2.02, -0.12), "scale": Vector3(0.76, 0.68, 0.72)},
+			{"position": Vector3(0.0, 2.18, 0.0), "scale": Vector3(0.96, 0.76, 0.88)}
+		]:
+			var canopy := MeshInstance3D.new()
+			var canopy_mesh := SphereMesh.new()
+			canopy_mesh.radius = 0.56 * scale_factor
+			canopy_mesh.height = 0.94 * scale_factor
+			canopy.mesh = canopy_mesh
+			canopy.position = canopy_data["position"] * scale_factor
+			canopy.scale = canopy_data["scale"]
+			canopy.material_override = canopy_material
+			tree.add_child(canopy)
 	else:
 		for canopy_data in [
 			{"position": Vector3(-0.7, 3.0, 0.2), "scale": Vector3(1.3, 1.1, 1.2)},
@@ -742,6 +851,89 @@ func _spawn_tree(position_value: Vector3, scale_factor: float, biome_name: Strin
 			tree.add_child(canopy)
 
 	world_root.add_child(tree)
+
+
+func _spawn_shrub_cluster(position_value: Vector3, scale_factor: float, biome_name: String = "meadow") -> void:
+	var shrub := Node3D.new()
+	shrub.position = position_value
+	shrub.rotation_degrees.y = randf_range(0.0, 360.0)
+	var leaf_material: Material = material_palette.get("foliage_meadow", material_palette.get("foliage"))
+	if biome_name == "forest":
+		leaf_material = material_palette.get("foliage_forest", leaf_material)
+	elif biome_name == "wetland":
+		leaf_material = material_palette.get("foliage_wetland", leaf_material)
+	for offset in [
+		Vector3(-0.34, 0.36, -0.06),
+		Vector3(0.18, 0.44, 0.08),
+		Vector3(0.0, 0.52, 0.0),
+	]:
+		var blob := MeshInstance3D.new()
+		var mesh := SphereMesh.new()
+		mesh.radius = 0.34 * scale_factor
+		mesh.height = 0.56 * scale_factor
+		blob.mesh = mesh
+		blob.position = offset * scale_factor
+		blob.scale = Vector3(1.28, 0.78, 1.14)
+		blob.material_override = leaf_material
+		shrub.add_child(blob)
+	var stem := MeshInstance3D.new()
+	var stem_mesh := CylinderMesh.new()
+	stem_mesh.top_radius = 0.06 * scale_factor
+	stem_mesh.bottom_radius = 0.09 * scale_factor
+	stem_mesh.height = 0.62 * scale_factor
+	stem.mesh = stem_mesh
+	stem.position = Vector3(0.0, 0.3 * scale_factor, 0.0)
+	stem.material_override = material_palette.get("bark")
+	shrub.add_child(stem)
+	world_root.add_child(shrub)
+
+
+func _spawn_dead_tree(position_value: Vector3, scale_factor: float) -> void:
+	var snag := Node3D.new()
+	snag.position = position_value
+	snag.rotation_degrees.y = randf_range(0.0, 360.0)
+	var trunk := MeshInstance3D.new()
+	var trunk_mesh := CylinderMesh.new()
+	trunk_mesh.top_radius = 0.08 * scale_factor
+	trunk_mesh.bottom_radius = 0.18 * scale_factor
+	trunk_mesh.height = 2.9 * scale_factor
+	trunk.mesh = trunk_mesh
+	trunk.position = Vector3(0.0, 1.42 * scale_factor, 0.0)
+	trunk.rotation_degrees.z = randf_range(-6.0, 6.0)
+	trunk.material_override = material_palette.get("bark")
+	snag.add_child(trunk)
+	for branch_data in [
+		{"position": Vector3(0.0, 2.2, 0.0), "size": Vector3(0.72, 0.08, 0.08), "rot": Vector3(0.0, 0.0, deg_to_rad(24.0))},
+		{"position": Vector3(0.0, 1.76, 0.12), "size": Vector3(0.56, 0.06, 0.06), "rot": Vector3(0.0, deg_to_rad(48.0), deg_to_rad(-18.0))}
+	]:
+		var branch := MeshInstance3D.new()
+		var branch_mesh := BoxMesh.new()
+		branch_mesh.size = branch_data["size"] * scale_factor
+		branch.mesh = branch_mesh
+		branch.position = branch_data["position"] * scale_factor
+		branch.rotation = branch_data["rot"]
+		branch.material_override = material_palette.get("bark")
+		snag.add_child(branch)
+	world_root.add_child(snag)
+
+
+func _spawn_stone_spire(position_value: Vector3, scale_factor: float) -> void:
+	var spire := Node3D.new()
+	spire.position = position_value
+	spire.rotation_degrees.y = randf_range(0.0, 360.0)
+	for piece_data in [
+		{"position": Vector3(0.0, 2.8, 0.0), "size": Vector3(1.2, 5.8, 1.0)},
+		{"position": Vector3(0.28, 5.4, -0.08), "size": Vector3(0.72, 2.8, 0.62)},
+	]:
+		var shard := MeshInstance3D.new()
+		var mesh := BoxMesh.new()
+		mesh.size = piece_data["size"] * scale_factor
+		shard.mesh = mesh
+		shard.position = piece_data["position"] * scale_factor
+		shard.rotation_degrees = Vector3(randf_range(-6.0, 8.0), randf_range(-12.0, 12.0), randf_range(-5.0, 5.0))
+		shard.material_override = material_palette.get("ruin_stone", material_palette.get("stone"))
+		spire.add_child(shard)
+	world_root.add_child(spire)
 
 
 func _spawn_cliff_outcrop(position_value: Vector3, scale_factor: float) -> void:
@@ -789,7 +981,7 @@ func _spawn_rock_cluster(position_value: Vector3, scale_factor: float) -> void:
 
 func _spawn_grass_patch(position_value: Vector3, scale_factor: float) -> void:
 	var biome_name := biome_at(position_value)
-	if biome_name == "highland":
+	if biome_name in ["highland", "alpine", "barren"]:
 		return
 	var patch := Node3D.new()
 	patch.position = position_value
@@ -807,6 +999,7 @@ func _spawn_grass_patch(position_value: Vector3, scale_factor: float) -> void:
 		blade.rotation_degrees = Vector3(randf_range(-8.0, 8.0), index * 36.0 + randf_range(-12.0, 12.0), randf_range(-6.0, 6.0))
 		blade.material_override = blade_material
 		patch.add_child(blade)
+		foliage_sway_nodes.append({"node": blade, "phase": randf() * TAU, "strength": randf_range(0.04, 0.09), "axis": "grass"})
 
 	world_root.add_child(patch)
 
@@ -826,6 +1019,7 @@ func _spawn_reed_clump(position_value: Vector3, scale_factor: float) -> void:
 		stem.rotation_degrees.z = randf_range(-6.0, 7.0)
 		stem.material_override = material_palette.get("reed", material_palette.get("grass_tuft"))
 		clump.add_child(stem)
+		foliage_sway_nodes.append({"node": stem, "phase": randf() * TAU, "strength": randf_range(0.05, 0.1), "axis": "reed"})
 	world_root.add_child(clump)
 
 
@@ -845,6 +1039,7 @@ func _spawn_flower_patch(position_value: Vector3, scale_factor: float) -> void:
 		stem.position = Vector3(randf_range(-0.16, 0.16), 0.21 * scale_factor, randf_range(-0.16, 0.16))
 		stem.material_override = material_palette.get("reed", material_palette.get("grass_tuft"))
 		patch.add_child(stem)
+		foliage_sway_nodes.append({"node": stem, "phase": randf() * TAU, "strength": randf_range(0.03, 0.07), "axis": "flower"})
 
 		var bloom := MeshInstance3D.new()
 		var bloom_mesh := SphereMesh.new()
@@ -872,10 +1067,16 @@ func _spawn_fallen_log(position_value: Vector3, scale_factor: float) -> void:
 
 func _spawn_landmarks() -> void:
 	_spawn_signal_tower()
-	for _index in range(4):
+	for _index in range(5):
 		_spawn_ruin_circle(_random_point_in_biomes(["highland", "meadow"], 0.2), randf_range(0.9, 1.35))
-	for _index in range(3):
+	for _index in range(4):
 		_spawn_abandoned_camp(_random_point_in_biomes(["forest", "meadow"], -0.15), randf_range(0.9, 1.25))
+	for _index in range(4):
+		_spawn_cave_entrance(_random_point_in_biomes(["highland", "alpine", "barren"], 5.4), randf_range(1.0, 1.55))
+	for _index in range(3):
+		_spawn_stone_arch(_random_point_in_biomes(["meadow", "highland", "scrub"], 1.2), randf_range(0.92, 1.28))
+	for _index in range(5):
+		_spawn_pond_cluster(_random_point_in_biomes(["wetland", "meadow"], -0.8), randf_range(0.9, 1.4))
 
 
 func _spawn_signal_tower() -> void:
@@ -1000,6 +1201,90 @@ func _spawn_abandoned_camp(position_value: Vector3, scale_factor: float) -> void
 	camp_root.add_child(crate)
 
 
+func _spawn_cave_entrance(position_value: Vector3, scale_factor: float) -> void:
+	var cave_root := Node3D.new()
+	cave_root.position = position_value
+	cave_root.rotation_degrees.y = randf_range(0.0, 360.0)
+	world_root.add_child(cave_root)
+
+	var mound := MeshInstance3D.new()
+	var mound_mesh := SphereMesh.new()
+	mound_mesh.radius = 2.4 * scale_factor
+	mound_mesh.height = 2.2 * scale_factor
+	mound.mesh = mound_mesh
+	mound.position = Vector3(0.0, 1.15 * scale_factor, 0.0)
+	mound.scale = Vector3(1.35, 0.8, 0.96)
+	mound.material_override = material_palette.get("ruin_stone", material_palette.get("stone"))
+	cave_root.add_child(mound)
+
+	var opening := MeshInstance3D.new()
+	var opening_mesh := SphereMesh.new()
+	opening_mesh.radius = 0.82 * scale_factor
+	opening_mesh.height = 1.22 * scale_factor
+	opening.mesh = opening_mesh
+	opening.position = Vector3(0.0, 0.78 * scale_factor, 1.44 * scale_factor)
+	opening.scale = Vector3(1.3, 1.0, 0.58)
+	opening.material_override = material_palette.get("coal")
+	cave_root.add_child(opening)
+
+
+func _spawn_stone_arch(position_value: Vector3, scale_factor: float) -> void:
+	var arch_root := Node3D.new()
+	arch_root.position = position_value
+	arch_root.rotation_degrees.y = randf_range(0.0, 360.0)
+	world_root.add_child(arch_root)
+
+	for side in [-1.0, 1.0]:
+		var pillar := MeshInstance3D.new()
+		var pillar_mesh := BoxMesh.new()
+		pillar_mesh.size = Vector3(0.9, 4.4, 1.2) * scale_factor
+		pillar.mesh = pillar_mesh
+		pillar.position = Vector3(side * 2.0 * scale_factor, 2.2 * scale_factor, 0.0)
+		pillar.material_override = material_palette.get("ruin_stone", material_palette.get("stone"))
+		arch_root.add_child(pillar)
+
+	var cap := MeshInstance3D.new()
+	var cap_mesh := BoxMesh.new()
+	cap_mesh.size = Vector3(5.2, 0.92, 1.28) * scale_factor
+	cap.mesh = cap_mesh
+	cap.position = Vector3(0.0, 4.46 * scale_factor, 0.0)
+	cap.rotation_degrees.z = randf_range(-6.0, 6.0)
+	cap.material_override = material_palette.get("ruin_stone", material_palette.get("stone"))
+	arch_root.add_child(cap)
+
+
+func _spawn_pond_cluster(position_value: Vector3, scale_factor: float) -> void:
+	var pond_root := Node3D.new()
+	pond_root.position = position_value
+	pond_root.rotation_degrees.y = randf_range(0.0, 360.0)
+	world_root.add_child(pond_root)
+
+	var pond := MeshInstance3D.new()
+	var pond_mesh := CylinderMesh.new()
+	pond_mesh.top_radius = 2.2 * scale_factor
+	pond_mesh.bottom_radius = 2.4 * scale_factor
+	pond_mesh.height = 0.08
+	pond.mesh = pond_mesh
+	pond.position = Vector3(0.0, -0.06, 0.0)
+	pond.scale = Vector3(1.24, 1.0, 0.72)
+	pond.material_override = material_palette.get("water")
+	pond_root.add_child(pond)
+
+	var shore := MeshInstance3D.new()
+	var shore_mesh := CylinderMesh.new()
+	shore_mesh.top_radius = 2.55 * scale_factor
+	shore_mesh.bottom_radius = 2.85 * scale_factor
+	shore_mesh.height = 0.05
+	shore.mesh = shore_mesh
+	shore.position = Vector3(0.0, -0.02, 0.0)
+	shore.scale = Vector3(1.28, 1.0, 0.82)
+	shore.material_override = material_palette.get("ground_soil")
+	pond_root.add_child(shore)
+
+	for _index in range(5):
+		_spawn_reed_clump(position_value + Vector3(randf_range(-2.6, 2.6), 0.0, randf_range(-1.8, 1.8)), randf_range(0.7, 1.05))
+
+
 func _spawn_player() -> void:
 	player = PlayerController.new()
 	player.position = Vector3(0.0, _terrain_height(0.0, 0.0) + 0.2, 0.0)
@@ -1114,15 +1399,15 @@ func _random_point_in_biomes(allowed_biomes: Array, min_height: float = -0.35) -
 func _creature_spawn_point(species_name: String) -> Vector3:
 	match species_name:
 		"wolf":
-			return _random_point_in_biomes(["forest", "highland", "alpine", "meadow"], -0.1)
+			return _random_point_in_biomes(["forest", "highland", "alpine", "scrub", "meadow"], -0.1)
 		"boar":
-			return _random_point_in_biomes(["forest", "meadow", "wetland"], -0.35)
+			return _random_point_in_biomes(["forest", "meadow", "wetland", "scrub"], -0.35)
 		"deer":
-			return _random_point_in_biomes(["meadow", "forest", "wetland"], -0.3)
+			return _random_point_in_biomes(["meadow", "forest", "wetland", "scrub"], -0.3)
 		"fox":
-			return _random_point_in_biomes(["forest", "meadow"], -0.1)
+			return _random_point_in_biomes(["forest", "meadow", "scrub"], -0.1)
 		_:
-			return _random_point_in_biomes(["forest", "meadow", "highland"], -0.1)
+			return _random_point_in_biomes(["forest", "meadow", "highland", "scrub"], -0.1)
 
 
 func random_world_point(min_height: float = -0.35) -> Vector3:
@@ -1143,13 +1428,13 @@ func _random_resource_point(kind: String) -> Vector3:
 			return point
 		if kind == "wood" and biome_name in ["forest", "meadow"]:
 			return point
-		if kind == "stone" and biome_name in ["highland", "alpine", "meadow"]:
+		if kind == "stone" and biome_name in ["highland", "alpine", "barren", "meadow"]:
 			return point
 		if kind == "fiber" and biome_name in ["meadow", "wetland"]:
 			return point
 		if kind == "herb" and biome_name in ["forest", "meadow", "wetland"]:
 			return point
-		if kind == "ore" and biome_name in ["highland", "alpine"]:
+		if kind == "ore" and biome_name in ["highland", "alpine", "barren"]:
 			return point
 	return random_world_point(-0.5)
 
@@ -2262,6 +2547,38 @@ func _spawn_effect_pulse(position_value: Vector3, color: Color, scale_factor: fl
 
 
 func _tick_world_effects(delta: float) -> void:
+	var breeze_time := Time.get_ticks_msec() / 1000.0
+	for cloud_field in cloud_fields:
+		var entries: Array = cloud_field.get("entries", [])
+		for entry_index in range(entries.size()):
+			var entry: Dictionary = entries[entry_index]
+			var pivot: Node3D = entry["pivot"]
+			var angle := float(entry["angle"]) + float(entry["speed"]) * delta * 60.0
+			entry["angle"] = angle
+			pivot.position.x = cos(angle) * float(entry["radius"])
+			pivot.position.z = sin(angle) * float(entry["radius"])
+			pivot.position.y = sin(angle * 1.8 + breeze_time * 0.16) * 2.2
+			pivot.rotation_degrees.y += float(entry["speed"]) * 12.0
+			entries[entry_index] = entry
+		cloud_field["entries"] = entries
+
+	for sway_index in range(foliage_sway_nodes.size() - 1, -1, -1):
+		var sway_data: Dictionary = foliage_sway_nodes[sway_index]
+		var sway_node: Node3D = sway_data.get("node")
+		if sway_node == null or not is_instance_valid(sway_node):
+			foliage_sway_nodes.remove_at(sway_index)
+			continue
+		var sway_axis := str(sway_data.get("axis", "grass"))
+		var sway_strength := float(sway_data.get("strength", 0.05))
+		var sway_phase := float(sway_data.get("phase", 0.0))
+		if sway_axis == "reed":
+			sway_node.rotation_degrees.z = sin(breeze_time * 0.82 + sway_phase) * sway_strength * 90.0
+		elif sway_axis == "flower":
+			sway_node.rotation_degrees.z = sin(breeze_time * 0.96 + sway_phase) * sway_strength * 56.0
+		else:
+			sway_node.rotation_degrees.z = sin(breeze_time * 1.14 + sway_phase) * sway_strength * 52.0
+		sway_node.rotation_degrees.x = cos(breeze_time * 0.92 + sway_phase) * sway_strength * 18.0
+
 	for index in range(active_effects.size() - 1, -1, -1):
 		var effect: Dictionary = active_effects[index]
 		var node: Node3D = effect["node"]

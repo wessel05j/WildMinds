@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ from survival_sandbox_ai.hardware import HardwareProfile, ModelChoice, choose_ol
 
 
 OLLAMA_URL = "http://127.0.0.1:11434"
+MODEL_PULL_ATTEMPTS = 5
+MODEL_PULL_RETRY_DELAY_SECONDS = 4.0
 ALLOWED_ACTIONS = (
     "wander",
     "forage",
@@ -44,6 +47,9 @@ class LocalModelRequiredError(RuntimeError):
 
 class LocalDecisionError(RuntimeError):
     pass
+
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
 
 @dataclass(slots=True)
@@ -138,6 +144,26 @@ def creature_from_payload(payload: dict[str, Any]) -> CreatureState:
     )
 
 
+def _clean_ollama_output(raw: bytes) -> str:
+    text = raw.decode(errors="replace")
+    text = _ANSI_ESCAPE_RE.sub("", text)
+    text = text.replace("\r", "\n")
+    cleaned_lines = [line.strip() for line in text.splitlines() if line.strip()]
+    meaningful_lines = [
+        line
+        for line in cleaned_lines
+        if not line.lower().startswith(
+            (
+                "pulling manifest",
+                "verifying sha256 digest",
+                "writing manifest",
+                "removing any unused layers",
+            )
+        )
+    ]
+    return "\n".join(meaningful_lines or cleaned_lines[-1:])
+
+
 class OllamaRuntime:
     def __init__(self, base_url: str = OLLAMA_URL, timeout: float = 20.0) -> None:
         self.base_url = base_url.rstrip("/")
@@ -183,28 +209,52 @@ class OllamaRuntime:
         payload = response.json()
         return [entry["name"] for entry in payload.get("models", [])]
 
-    def ensure_model(self, model_name: str) -> None:
+    def _pull_model_once(self, model_name: str) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            ["ollama", "pull", model_name],
+            capture_output=True,
+            check=False,
+        )
+
+    def ensure_model(self, model_name: str) -> bool:
         try:
             installed = set(self.list_models())
         except Exception as exc:  # pragma: no cover - defensive network path
             raise RuntimeError(f"Could not query installed Ollama models: {exc}") from exc
 
         if model_name in installed:
-            return
+            return False
 
-        try:
-            completed = subprocess.run(
-                ["ollama", "pull", model_name],
-                capture_output=True,
-                check=False,
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError("Ollama is not installed or not on PATH.") from exc
+        last_error = ""
+        for attempt in range(1, MODEL_PULL_ATTEMPTS + 1):
+            try:
+                completed = self._pull_model_once(model_name)
+            except FileNotFoundError as exc:
+                raise RuntimeError("Ollama is not installed or not on PATH.") from exc
 
-        if completed.returncode != 0:
-            stderr_text = completed.stderr.decode(errors="replace").strip()
-            stdout_text = completed.stdout.decode(errors="replace").strip()
-            raise RuntimeError(stderr_text or stdout_text or f"Could not pull {model_name}")
+            stderr_text = _clean_ollama_output(completed.stderr)
+            stdout_text = _clean_ollama_output(completed.stdout)
+            if completed.returncode == 0:
+                try:
+                    installed = set(self.list_models())
+                except Exception as exc:  # pragma: no cover - defensive network path
+                    last_error = f"Ollama reported a successful pull, but verification failed: {exc}"
+                else:
+                    if model_name in installed:
+                        return True
+                    last_error = (
+                        f"Ollama reported a successful pull, but {model_name} was still not listed as installed."
+                    )
+            else:
+                last_error = stderr_text or stdout_text or f"Could not pull {model_name}"
+
+            if attempt < MODEL_PULL_ATTEMPTS:
+                time.sleep(MODEL_PULL_RETRY_DELAY_SECONDS * attempt)
+
+        raise RuntimeError(
+            f"Could not pull {model_name} after {MODEL_PULL_ATTEMPTS} attempts. "
+            f"Last error: {last_error}"
+        )
 
     def chat(self, model_name: str, system_prompt: str, user_prompt: str) -> str:
         response = requests.post(
@@ -245,12 +295,17 @@ def bootstrap_local_model(runtime: OllamaRuntime | None = None) -> BootstrapResu
         )
 
     try:
-        runtime.ensure_model(model_choice.model_name)
+        installed_now = runtime.ensure_model(model_choice.model_name)
+        install_note = (
+            f"Installed missing local model {model_choice.model_name} automatically. "
+            if installed_now
+            else f"Using local model {model_choice.model_name}. "
+        )
         return BootstrapResult(
             hardware=hardware,
             model_choice=model_choice,
             ready=True,
-            details=f"Using local model {model_choice.model_name}. {model_choice.reasoning}",
+            details=f"{install_note}{model_choice.reasoning}",
         )
     except Exception as exc:
         return BootstrapResult(
