@@ -1,13 +1,14 @@
 # WildMinds
 
-WildMinds is a 2D PyGame survival sandbox where the creatures are driven by a local AI model instead of fixed enemy scripts.
+WildMinds is a 3D survival sandbox where the creatures are driven by a local AI model instead of fixed enemy scripts.
 
-Each wolf, boar, and scavenger gets a compact world summary, its own short memory, its current needs, and a personality prompt. The model chooses a high-level action such as `attack`, `stalk`, `forage`, or `flee`, and the game carries that action out in real time.
+Each wolf, boar, and scavenger gets a compact world summary, its own short memory, its current needs, and a personality prompt. The model chooses a high-level action such as `attack`, `stalk`, `forage`, or `flee`, and the game carries that action out inside a real 3D Godot scene.
 
 ## What Makes It Different
 
 - Local AI-driven creatures through `Ollama`
 - Automatic hardware check and model selection
+- Real 3D world built in `Godot 4`
 - Smooth background AI decisions so gameplay stays responsive
 - Named creatures with visible action logs
 - Survival systems for hunger, energy, gathering, combat, and campfires
@@ -15,6 +16,7 @@ Each wolf, boar, and scavenger gets a compact world summary, its own short memor
 ## Requirements
 
 - Python `3.10+`
+- `Godot 4.6+`
 - `Ollama` installed locally if you want live local-model creatures
 
 If `Ollama` is unavailable, the game falls back to rule-based survival behavior instead of crashing.
@@ -31,10 +33,24 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
+The launcher will:
+
+1. find your local `Godot 4` install
+2. start the local AI helper service
+3. detect your hardware
+4. choose and pull a matching `Ollama` model if needed
+5. boot the 3D game
+
+## Legacy 2D Prototype
+
+```powershell
+python main.py --legacy-2d
+```
+
 ## Headless Smoke Test
 
 ```powershell
-python main.py --headless-smoke --frames 90
+python main.py --headless-smoke
 ```
 
 ## Automated Tests
